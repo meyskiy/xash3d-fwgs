@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 # encoding: utf-8
-# a1batross, mittorn, 2018
+# a1batross, mittorn, 201
 
 from waflib import Build, Context, Logs, TaskGen
 from waflib.Tools import waf_unit_test, c_tests
