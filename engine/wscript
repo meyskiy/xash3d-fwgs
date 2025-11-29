@@ -154,6 +154,15 @@ def configure(conf):
 
 	conf.check_cc(fragment=EXECINFO_TEST, msg='Checking for glibc backtrace()', mandatory=False, define_name='HAVE_EXECINFO')
 
+	# Check for OpenGL library (needed for ImGui)
+	if not conf.env.DEDICATED:
+		if conf.env.DEST_OS == 'win32':
+			# On Windows, OpenGL32 is always available
+			conf.check_cc(lib='opengl32', uselib_store='OPENGL32', mandatory=True)
+		else:
+			# On other platforms, check for GL library
+			conf.check_cc(lib='GL', uselib_store='GL', mandatory=False)
+
 	conf.define('ENGINE_DLL', 1)
 	conf.define_cond('XASH_ENGINE_TESTS', conf.options.ENGINE_TESTS)
 
@@ -200,7 +209,9 @@ def build(bld):
 	bld(name = 'engine_includes', export_includes = '. common common/imagelib', use = 'filesystem_includes')
 
 	libs = ['engine_includes', 'public', 'werror', 'backtrace', 'library_suffix']
-	includes = ['server', 'client', 'client/vgui', 'common/soundlib', 'platform']
+	includes = ['server', 'client', 'client/vgui', 'common/soundlib', 'platform', 'client/ui/imgui']
+	if not bld.env.DEDICATED:
+		includes += ['../ref/gl']  # for gl_export.h in imgui_backend (Android only)
 
 	# basic build: dedicated only
 	source = bld.path.ant_glob(['common/*.c', 'common/imagelib/*.c', 'common/soundlib/*.c', 'server/*.c'])
@@ -283,7 +294,17 @@ def build(bld):
 		# add client files
 		if not bld.env.DEDICATED:
 			source += bld.path.ant_glob('client/**/*.c')
+			# add ImGui files (exclude misc files, but include imgui_demo.cpp for ShowDemoWindow)
+			imgui_files = bld.path.ant_glob('client/ui/imgui/*.cpp')
+			imgui_files = [f for f in imgui_files if not 'misc' in str(f)]
+			source += imgui_files
+			source += bld.path.ant_glob('client/ui/imgui/backends/imgui_impl_opengl2.cpp')
 			libs += ['bzip2', 'MultiEmulator', 'opus', 'opusfile', 'vorbis', 'vorbisfile']
+			# Add OpenGL library for ImGui (registered in configure)
+			if bld.env.DEST_OS == 'win32':
+				libs += ['OPENGL32']
+			else:
+				libs += ['GL']
 
 		# Android port is linked differently
 		if bld.env.DEST_OS == 'android':

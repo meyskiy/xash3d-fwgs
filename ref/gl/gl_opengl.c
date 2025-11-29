@@ -82,6 +82,13 @@ CVAR_DEFINE_AUTO( kek_aimbot_fov_r, "255", FCVAR_ARCHIVE, "aimbot FOV color Red 
 CVAR_DEFINE_AUTO( kek_aimbot_fov_g, "0", FCVAR_ARCHIVE, "aimbot FOV color Green (0-255)" );
 CVAR_DEFINE_AUTO( kek_aimbot_fov_b, "0", FCVAR_ARCHIVE, "aimbot FOV color Blue (0-255)" );
 
+// AntiAim cvars
+CVAR_DEFINE_AUTO( kek_antiaim, "0", FCVAR_ARCHIVE, "enable antiaim" );
+CVAR_DEFINE_AUTO( kek_antiaim_mode, "0", FCVAR_ARCHIVE, "antiaim mode (0=jitter, 1=spin, 2=fake, 3=backwards, 4=sideways, 5=legit, 6=fast spin, 7=random)" );
+CVAR_DEFINE_AUTO( kek_antiaim_speed, "50.0", FCVAR_ARCHIVE, "antiaim rotation speed" );
+CVAR_DEFINE_AUTO( kek_antiaim_jitter_range, "30.0", FCVAR_ARCHIVE, "antiaim jitter range (degrees)" );
+CVAR_DEFINE_AUTO( kek_antiaim_fake_angle, "58.0", FCVAR_ARCHIVE, "antiaim fake angle offset (degrees)" );
+
 // Custom viewmodel FOV (arms distancing)
 CVAR_DEFINE_AUTO( kek_custom_fov, "0", FCVAR_ARCHIVE, "enable custom viewmodel FOV (arms distancing)" );
 CVAR_DEFINE_AUTO( kek_custom_fov_value, "10", FCVAR_ARCHIVE, "custom FOV increase (higher = smaller/more distant arms)" );
@@ -1259,6 +1266,13 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &kek_aimbot_fov_r );
 	gEngfuncs.Cvar_RegisterVariable( &kek_aimbot_fov_g );
 	gEngfuncs.Cvar_RegisterVariable( &kek_aimbot_fov_b );
+
+	// Register AntiAim cvars
+	gEngfuncs.Cvar_RegisterVariable( &kek_antiaim );
+	gEngfuncs.Cvar_RegisterVariable( &kek_antiaim_mode );
+	gEngfuncs.Cvar_RegisterVariable( &kek_antiaim_speed );
+	gEngfuncs.Cvar_RegisterVariable( &kek_antiaim_jitter_range );
+	gEngfuncs.Cvar_RegisterVariable( &kek_antiaim_fake_angle );
 
 	// Custom FOV cvars
 	gEngfuncs.Cvar_RegisterVariable( &kek_custom_fov );

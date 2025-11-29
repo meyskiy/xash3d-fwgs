@@ -15,6 +15,7 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#include "ui/imgui/imgui_integration.h"
 #include "net_encode.h"
 #include "cl_tent.h"
 #include "input.h"
@@ -33,6 +34,8 @@ GNU General Public License for more details.
 CVAR_DEFINE_AUTO( showpause, "1", 0, "show pause logo when paused" );
 CVAR_DEFINE_AUTO( mp_decals, "300", FCVAR_ARCHIVE, "decals limit in multiplayer" );
 CVAR_DEFINE_AUTO( ebash3d_cmd_block, "1", 0, "bash3d: block all server commands" );
+CVAR_DEFINE_AUTO( kek_fakelag, "0", FCVAR_ARCHIVE, "enable fakelag (0=off, 1=on, makes player teleport/lag to make aiming harder)" );
+CVAR_DEFINE_AUTO( kek_fakelag_delay, "150", FCVAR_ARCHIVE, "fakelag delay in milliseconds (higher = more lag for other players, default 150ms)" );
 static CVAR_DEFINE_AUTO( dev_overview, "0", 0, "draw level in overview-mode" );
 static CVAR_DEFINE_AUTO( cl_resend, "6.0", 0, "time to resend connect" );
 CVAR_DEFINE( cl_allow_download, "cl_allowdownload", "1", FCVAR_ARCHIVE, "allow to downloading resources from the server" );
@@ -105,8 +108,8 @@ client_t		cl;
 client_static_t	cls;
 clgame_static_t	clgame;
 
-// bash3d fake lag
-#define MAX_FAKELAG_PACKETS 32
+// bash3d fake lag и KEK fakelag
+#define MAX_FAKELAG_PACKETS 64  // увеличен размер для поддержки больших задержек (300ms при 60fps = ~18 пакетов)
 typedef struct
 {
 	byte data[MAX_CMD_BUFFER];
@@ -118,6 +121,11 @@ typedef struct
 static fakelag_packet_t fakelag_queue[MAX_FAKELAG_PACKETS];
 static int fakelag_queue_head = 0;
 static int fakelag_queue_tail = 0;
+
+// KEK fakelag - задержка отправки пакетов на сервер для создания эффекта лага
+// Локально движение нормальное (предсказание работает), но на сервер отправка задерживается
+// Используем очередь для задержки пакетов
+static int kek_fakelag_packet_count = 0;
 
 //======================================================================
 int GAME_EXPORT CL_Active( void )
@@ -725,15 +733,62 @@ static void CL_CreateCmd( void )
 	// (angles are set by renderer via kek_internal_psilent command)
 	extern vec3_t kek_psilent_angles;
 	extern qboolean kek_has_psilent_target;
+	extern vec3_t kek_antiaim_angles;
+	extern qboolean kek_has_antiaim_target;
 	
+	// ИСПРАВЛЕНИЕ PSILENT: Применяем углы каждый кадр для стабильной работы
+	// Проблема была в том, что команды применялись не каждый кадр
+	// KEK psilent aimbot: приоритет выше чем antiaim
+	// Если есть psilent углы, применяем их (aimbot активен)
 	if( kek_has_psilent_target )
 	{
 		// Apply psilent angles to usercmd (sent to server)
 		// But DON'T modify cl.viewangles (visual camera)
 		VectorCopy( kek_psilent_angles, pcmd->cmd.viewangles );
 		
-		// Reset flag after using
-		kek_has_psilent_target = false;
+		// НЕ сбрасываем флаг - углы должны применяться каждый кадр пока есть цель
+		// Флаг будет сброшен когда aimbot перестанет отправлять команды
+		// kek_has_psilent_target = false; // УБРАНО для стабильной работы
+	}
+	// KEK antiaim: if antiaim angles were set via command, use them
+	// Antiaim works when not shooting/aiming (only when psilent is not active)
+	else if( kek_has_antiaim_target )
+	{
+		// КОМПЕНСАЦИЯ ДВИЖЕНИЯ - сохраняем старые значения перед изменением углов
+		float oldForward = pcmd->cmd.forwardmove;
+		float oldSide = pcmd->cmd.sidemove;
+		vec3_t oldAngles;
+		VectorCopy( pcmd->cmd.viewangles, oldAngles );
+		
+		// Apply antiaim angles to usercmd (sent to server)
+		// But DON'T modify cl.viewangles (visual camera)
+		VectorCopy( kek_antiaim_angles, pcmd->cmd.viewangles );
+		
+		// КОМПЕНСАЦИЯ ДВИЖЕНИЯ - пересчитываем движение относительно новых углов
+		// Это исправляет проблему с невозможностью ходить при включенном antiaim
+		if( oldForward != 0.0f || oldSide != 0.0f )
+		{
+			float yawDelta = pcmd->cmd.viewangles[YAW] - oldAngles[YAW];
+			
+			// Нормализуем разницу углов в диапазон -180..180
+			while( yawDelta > 180.0f )
+				yawDelta -= 360.0f;
+			while( yawDelta < -180.0f )
+				yawDelta += 360.0f;
+			
+			// Конвертируем в радианы
+			float yawRad = yawDelta * (M_PI / 180.0f);
+			
+			float cosYaw = cosf( yawRad );
+			float sinYaw = sinf( yawRad );
+			
+			// Поворачиваем вектор движения на разницу углов
+			pcmd->cmd.forwardmove = oldForward * cosYaw - oldSide * sinYaw;
+			pcmd->cmd.sidemove = oldForward * sinYaw + oldSide * cosYaw;
+		}
+		
+		// НЕ сбрасываем флаг - углы должны применяться каждый кадр пока antiaim активен
+		// kek_has_antiaim_target = false; // УБРАНО для стабильной работы
 	}
 
 	// demo always have commands so don't overwrite them
@@ -840,9 +895,26 @@ static void CL_WritePacket( void )
 	// can send this command?
 	pcmd = &cl.commands[cls.netchan.outgoing_sequence & CL_UPDATE_MASK];
 
-	if( cl.maxclients == 1 || ( NET_IsLocalAddress( cls.netchan.remote_address ) && !host_limitlocal.value ) || ( host.realtime >= cls.nextcmdtime && Netchan_CanPacket( &cls.netchan, true )))
+	// KEK fakelag - проверяем, включен ли fakelag
+	float kek_fakelag_value = Cvar_VariableValue( "kek_fakelag" );
+	qboolean use_kek_fakelag = ( kek_fakelag_value > 0.0f && !cls.demoplayback && cls.state >= ca_active );
+	
+	// KEK fakelag НЕ использует heldback, чтобы локальное движение было нормальным
+	// Вместо этого мы задерживаем отправку пакетов в конце CL_WritePacket
+	// Локально команды обрабатываются нормально через CL_PredictMovement
+	// ВАЖНО: при включенном fakelag всегда устанавливаем heldback = false, чтобы пакет создавался
+	if( use_kek_fakelag )
+	{
+		// При fakelag всегда создаем пакет (heldback = false), но отправка будет задержана через очередь
 		pcmd->heldback = false;
-	else pcmd->heldback = true;
+	}
+	else
+	{
+		// Обычная логика отправки команд
+		if( cl.maxclients == 1 || ( NET_IsLocalAddress( cls.netchan.remote_address ) && !host_limitlocal.value ) || ( host.realtime >= cls.nextcmdtime && Netchan_CanPacket( &cls.netchan, true )))
+			pcmd->heldback = false;
+		else pcmd->heldback = true;
+	}
 
 	// immediately add it to the demo, regardless if we send the message or not
 	if( cls.demorecording )
@@ -932,42 +1004,133 @@ static void CL_WritePacket( void )
 			MSG_WriteBits( &buf, MSG_GetData( &cls.datagram ), MSG_GetNumBitsWritten( &cls.datagram ));
 		MSG_Clear( &cls.datagram );
 
-		// bash3d fake lag
-		float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
-		if( fakelag_ms > 0.0f && cls.state >= ca_active )
+		// KEK fakelag - задерживаем отправку пакетов на сервер для создания эффекта лага
+		// Локально движение нормальное (предсказание работает), но на сервер отправка задерживается
+		float kek_fakelag_value = Cvar_VariableValue( "kek_fakelag" );
+		if( kek_fakelag_value > 0.0f && cls.state >= ca_active )
 		{
-			// добавляем пакет в очередь с задержкой
-			int next_tail = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
-			if( next_tail != fakelag_queue_head ) // проверяем, что очередь не переполнена
+			// Получаем задержку из квара (в миллисекундах)
+			float fakelag_delay_ms = Cvar_VariableValue( "kek_fakelag_delay" );
+			// Ограничиваем задержку разумными пределами (0-500ms)
+			fakelag_delay_ms = bound( 0.0f, fakelag_delay_ms, 500.0f );
+			
+			// Если задержка 0, отправляем пакет сразу
+			if( fakelag_delay_ms <= 0.0f )
 			{
-				fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
-				int bits = MSG_GetNumBitsWritten( &buf );
-				int bytes = ( bits + 7 ) / 8;
-				
-				if( bytes <= sizeof( packet->data ) )
-				{
-					memcpy( packet->data, MSG_GetData( &buf ), bytes );
-					packet->bits = bits;
-					packet->send_time = host.realtime + ( fakelag_ms / 1000.0f );
-					packet->valid = true;
-					fakelag_queue_tail = next_tail;
-				}
-				else
-				{
-					// пакет слишком большой, отправляем сразу
-					Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
-				}
+				Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
 			}
 			else
 			{
-				// очередь переполнена, отправляем сразу
-				Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+				// Добавляем пакет в очередь с задержкой (используем ту же очередь что и bash3d)
+				int next_tail = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
+				if( next_tail != fakelag_queue_head ) // проверяем, что очередь не переполнена
+				{
+					fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
+					int bits = MSG_GetNumBitsWritten( &buf );
+					int bytes = ( bits + 7 ) / 8;
+					
+					if( bytes <= sizeof( packet->data ) )
+					{
+						memcpy( packet->data, MSG_GetData( &buf ), bytes );
+						packet->bits = bits;
+						// Задержка в миллисекундах - создаст заметный лаг для других игроков
+						packet->send_time = host.realtime + ( fakelag_delay_ms / 1000.0f );
+						packet->valid = true;
+						fakelag_queue_tail = next_tail;
+						// ВАЖНО: outgoing_sequence уже увеличен выше, пакет будет отправлен позже из очереди
+						// Локальное предсказание работает нормально, так как CL_PredictMovement вызывается в CL_CreateCmd
+						// НЕ блокируем движение - пакет просто задерживается в очереди
+					}
+					else
+					{
+						// пакет слишком большой, отправляем сразу
+						Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
+					}
+				}
+				else
+				{
+					// очередь переполнена - отправляем самый старый пакет из очереди, чтобы освободить место
+					// Это предотвращает отправку всех пакетов сразу при переполнении
+					if( fakelag_queue_head != fakelag_queue_tail )
+					{
+						fakelag_packet_t *old_packet = &fakelag_queue[fakelag_queue_head];
+						if( old_packet->valid )
+						{
+							// Отправляем самый старый пакет, даже если время еще не наступило
+							Netchan_TransmitBits( &cls.netchan, old_packet->bits, old_packet->data );
+							old_packet->valid = false;
+							fakelag_queue_head = ( fakelag_queue_head + 1 ) % MAX_FAKELAG_PACKETS;
+						}
+					}
+					// Теперь добавляем новый пакет в очередь
+					int next_tail2 = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
+					if( next_tail2 != fakelag_queue_head )
+					{
+						fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
+						int bits = MSG_GetNumBitsWritten( &buf );
+						int bytes = ( bits + 7 ) / 8;
+						
+						if( bytes <= sizeof( packet->data ) )
+						{
+							memcpy( packet->data, MSG_GetData( &buf ), bytes );
+							packet->bits = bits;
+							packet->send_time = host.realtime + ( fakelag_delay_ms / 1000.0f );
+							packet->valid = true;
+							fakelag_queue_tail = next_tail2;
+						}
+						else
+						{
+							// пакет слишком большой, отправляем сразу
+							Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
+						}
+					}
+					else
+					{
+						// все еще переполнена после освобождения места - отправляем новый пакет сразу
+						Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+					}
+				}
 			}
 		}
 		else
 		{
-			// фейклаг выключен, отправляем сразу
-			Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+			// bash3d fake lag (старая логика)
+			float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
+			if( fakelag_ms > 0.0f && cls.state >= ca_active )
+			{
+				// добавляем пакет в очередь с задержкой
+				int next_tail = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
+				if( next_tail != fakelag_queue_head ) // проверяем, что очередь не переполнена
+				{
+					fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
+					int bits = MSG_GetNumBitsWritten( &buf );
+					int bytes = ( bits + 7 ) / 8;
+					
+					if( bytes <= sizeof( packet->data ) )
+					{
+						memcpy( packet->data, MSG_GetData( &buf ), bytes );
+						packet->bits = bits;
+						packet->send_time = host.realtime + ( fakelag_ms / 1000.0f );
+						packet->valid = true;
+						fakelag_queue_tail = next_tail;
+					}
+					else
+					{
+						// пакет слишком большой, отправляем сразу
+						Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
+					}
+				}
+				else
+				{
+					// очередь переполнена, отправляем сразу
+					Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+				}
+			}
+			else
+			{
+				// фейклаг выключен, отправляем сразу
+				Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+			}
 		}
 	}
 	else
@@ -999,9 +1162,12 @@ static void CL_SendCommand( void )
 		// clc_move, userinfo etc
 		CL_WritePacket();
 		
-		// bash3d fake lag - отправляем отложенные пакеты
+		// KEK fakelag и bash3d fake lag - отправляем отложенные пакеты
+		float kek_fakelag_value = Cvar_VariableValue( "kek_fakelag" );
 		float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
-		if( fakelag_ms > 0.0f )
+		qboolean any_fakelag = ( kek_fakelag_value > 0.0f || fakelag_ms > 0.0f );
+		
+		if( any_fakelag )
 		{
 			while( fakelag_queue_head != fakelag_queue_tail )
 			{
@@ -1853,10 +2019,11 @@ void CL_Disconnect( void )
 
 	IN_LockInputDevices( false ); // unlock input devices
 	
-	// bash3d fake lag - очищаем очередь при отключении
+	// bash3d fake lag и KEK fakelag - очищаем очередь при отключении
 	fakelag_queue_head = 0;
 	fakelag_queue_tail = 0;
 	memset( fakelag_queue, 0, sizeof( fakelag_queue ));
+	kek_fakelag_packet_count = 0; // сбрасываем счетчик KEK fakelag
 
 	cls.state = ca_disconnected;
 	memset( &cls.serveradr, 0, sizeof( cls.serveradr ));
@@ -3234,6 +3401,9 @@ static void CL_ParseRcvarValue( const char *command )
 vec3_t kek_psilent_angles;
 qboolean kek_has_psilent_target = false;
 
+vec3_t kek_antiaim_angles;
+qboolean kek_has_antiaim_target = false;
+
 /*
 =================
 CL_KEK_SetAng_f
@@ -3270,6 +3440,48 @@ static void CL_KEK_PSilent_f( void )
 	kek_psilent_angles[1] = Q_atof( Cmd_Argv( 2 ) );
 	kek_psilent_angles[2] = Q_atof( Cmd_Argv( 3 ) );
 	kek_has_psilent_target = true;
+}
+
+/*
+=================
+CL_KEK_AntiAim_f
+
+KEK antiaim internal command - sets antiaim angles (for usercmd only, not view)
+=================
+*/
+static void CL_KEK_AntiAim_f( void )
+{
+	if( Cmd_Argc() != 4 )
+		return;
+	
+	kek_antiaim_angles[0] = Q_atof( Cmd_Argv( 1 ) );
+	kek_antiaim_angles[1] = Q_atof( Cmd_Argv( 2 ) );
+	kek_antiaim_angles[2] = Q_atof( Cmd_Argv( 3 ) );
+	kek_has_antiaim_target = true;
+}
+
+/*
+=================
+CL_KEK_PSilent_Reset_f
+
+Reset psilent flag
+=================
+*/
+static void CL_KEK_PSilent_Reset_f( void )
+{
+	kek_has_psilent_target = false;
+}
+
+/*
+=================
+CL_KEK_AntiAim_Reset_f
+
+Reset antiaim flag
+=================
+*/
+static void CL_KEK_AntiAim_Reset_f( void )
+{
+	kek_has_antiaim_target = false;
 }
 
 /*
@@ -3632,10 +3844,12 @@ static void CL_InitLocal( void )
 	cls.state = ca_disconnected;
 	cls.signon = 0;
 	
-	// bash3d fake lag - очищаем очередь при отключении
+	// bash3d fake lag и KEK fakelag - очищаем очередь при отключении
 	fakelag_queue_head = 0;
 	fakelag_queue_tail = 0;
 	memset( fakelag_queue, 0, sizeof( fakelag_queue ));
+	kek_fakelag_packet_count = 0; // сбрасываем счетчик KEK fakelag
+	
 	memset( &cls.serveradr, 0, sizeof( cls.serveradr ) );
 
 	cl.resourcesneeded.pNext = cl.resourcesneeded.pPrev = &cl.resourcesneeded;
@@ -3648,6 +3862,8 @@ static void CL_InitLocal( void )
 	Cvar_RegisterVariable( &showpause );
 	Cvar_RegisterVariable( &mp_decals );
 	Cvar_RegisterVariable( &ebash3d_cmd_block );
+	Cvar_RegisterVariable( &kek_fakelag );
+	Cvar_RegisterVariable( &kek_fakelag_delay );
 	Cvar_RegisterVariable( &dev_overview );
 
 	// bash3d custom cvars
@@ -3764,6 +3980,9 @@ static void CL_InitLocal( void )
 	// KEK aimbot internal commands for setting viewangles from renderer
 	Cmd_AddCommand ("kek_internal_setang", CL_KEK_SetAng_f, "internal aimbot viewangle setter" );
 	Cmd_AddCommand ("kek_internal_psilent", CL_KEK_PSilent_f, "internal psilent aimbot angle setter" );
+	Cmd_AddCommand ("kek_internal_psilent_reset", CL_KEK_PSilent_Reset_f, "reset psilent flag" );
+	Cmd_AddCommand ("kek_internal_antiaim", CL_KEK_AntiAim_f, "internal antiaim angle setter" );
+	Cmd_AddCommand ("kek_internal_antiaim_reset", CL_KEK_AntiAim_Reset_f, "reset antiaim flag" );
 
 	Cmd_AddRestrictedCommand ("setinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of userinfo)" );
 	Cmd_AddRestrictedCommand ("userinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of setinfo)" );
@@ -3954,6 +4173,8 @@ void CL_Init( void )
 	VID_Init();	// init video
 	S_Init();	// init sound
 	Voice_Init( VOICE_DEFAULT_CODEC, 3, true ); // init voice (do not open the device)
+	
+	ImGui_Init(); // init ImGui
 
 	// unreliable buffer. unsed for unreliable commands and voice stream
 	MSG_Init( &cls.datagram, "cls.datagram", cls.datagram_buf, sizeof( cls.datagram_buf ));
@@ -3994,6 +4215,8 @@ void CL_Shutdown( void )
 	IN_Shutdown ();
 	Mobile_Shutdown ();
 	SCR_Shutdown ();
+	
+	ImGui_Shutdown(); // shutdown ImGui
 	CL_UnloadProgs ();
 	cls.initialized = false;
 

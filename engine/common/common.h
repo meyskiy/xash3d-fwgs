@@ -734,7 +734,10 @@ typedef enum connprotocol_e
 // shared calls
 struct physent_s;
 struct sv_client_s;
+#ifndef SIZEBUF_T_DEFINED
 typedef struct sizebuf_s sizebuf_t;
+#define SIZEBUF_T_DEFINED
+#endif
 int SV_GetMaxClients( void );
 
 #if !XASH_DEDICATED

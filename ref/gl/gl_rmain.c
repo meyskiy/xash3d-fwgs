@@ -65,6 +65,12 @@ extern cvar_t kek_aimbot_fov_r;
 extern cvar_t kek_aimbot_fov_g;
 extern cvar_t kek_aimbot_fov_b;
 
+extern cvar_t kek_antiaim;
+extern cvar_t kek_antiaim_mode;
+extern cvar_t kek_antiaim_speed;
+extern cvar_t kek_antiaim_jitter_range;
+extern cvar_t kek_antiaim_fake_angle;
+
 extern cvar_t kek_debug;
 
 extern cvar_t kek_custom_fov;
@@ -80,6 +86,7 @@ extern cvar_t kek_viewmodel_glow_alpha;
 
 // Function prototypes
 void kek_RenderViewModelGlow( void );
+static void kek_ApplyAntiAim( ref_viewpass_t *rvp );
 
 static qboolean kek_UserinfoValueForKey( const char *userinfo, const char *key, char *out, size_t out_size )
 {
@@ -1415,16 +1422,16 @@ static qboolean kek_IsPlayerAlive( cl_entity_t *ent )
 	// БАЗОВАЯ ПРОВЕРКА #1: Проверяем, что это действительно игрок
 	if( !ent || !ent->player )
 		return false;
-	
+
 	// БАЗОВАЯ ПРОВЕРКА #2: Проверяем индекс
 	if( ent->index < 1 || (gp_cl && ent->index > gp_cl->maxclients) )
 		return false;
-	
+
 	// КРИТИЧЕСКАЯ ПРОВЕРКА #1: Проверяем spectator флаг
 	// Спектаторы не являются живыми игроками
 	if( ent->curstate.spectator == 1 )
 		return false;
-	
+
 	// КРИТИЧЕСКАЯ ПРОВЕРКА #2: Проверяем, что игрок не помечен как невидимый
 	if( FBitSet( ent->curstate.effects, EF_NODRAW ))
 		return false;
@@ -1435,26 +1442,26 @@ static qboolean kek_IsPlayerAlive( cl_entity_t *ent )
 	if( ent->curstate.solid == SOLID_NOT )
 	{
 		// Если solid == NOT И нет валидной позиции - вероятно мертв
-		if( VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin ))
-			return false;
+	if( VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin ))
+		return false;
 	}
-	
+
 	// КРИТИЧЕСКАЯ ПРОВЕРКА #4: Проверяем валидность позиции
 	// Мертвые игроки часто имеют нулевую позицию
 	if( VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin ))
 		return false;
-	
+
 	// КРИТИЧЕСКАЯ ПРОВЕРКА #5: Проверяем модель - призраки могут иметь другую модель
 	if( !ent->model || ent->model->type == mod_bad )
 		return false;
-	
+
 	// КРИТИЧЕСКАЯ ПРОВЕРКА #6: Проверяем комбинацию признаков мертвого игрока
 	// Мертвые игроки часто имеют: нет оружия + тип движения NONE + solid NOT
 	if( ent->curstate.weaponmodel == 0 && 
 	    ent->curstate.movetype == MOVETYPE_NONE &&
 	    ent->curstate.solid == SOLID_NOT )
 		return false;
-	
+
 	// Если все проверки пройдены - игрок ЖИВ
 	return true;
 }
@@ -2513,9 +2520,26 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 	
 	// Get cvar values
 	aimbot_enabled = kek_aimbot.value;
+	
+	// Если aimbot выключен, применяем antiaim и выходим
 	if( !aimbot_enabled )
 	{
 		kek_aimbot_last_target = -1;
+		
+		// Apply antiaim when aimbot is disabled
+		if( kek_antiaim.value )
+		{
+			kek_ApplyAntiAim( rvp );
+		}
+		else
+		{
+			// Сбрасываем флаг antiaim когда antiaim выключен
+			// Это предотвращает применение старых углов
+			char cmd[64];
+			Q_snprintf( cmd, sizeof( cmd ), "kek_internal_antiaim_reset\n" );
+			gEngfuncs.Cbuf_InsertText( cmd );
+		}
+		
 		return;
 	}
 	
@@ -2670,6 +2694,15 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 		VectorClear( kek_aimbot_last_angles );
 	}
 	
+	// Сбрасываем флаг psilent если нет цели (aimbot не активен)
+	// Это предотвращает применение старых углов когда aimbot выключен
+	if( !best_target && aimbot_psilent )
+	{
+		char reset_cmd[64];
+		Q_snprintf( reset_cmd, sizeof( reset_cmd ), "kek_internal_psilent_reset\n" );
+		gEngfuncs.Cbuf_InsertText( reset_cmd );
+	}
+	
 	// Aim at best target
 	if( best_target && kek_GetPlayerPosition( best_target, target_origin ))
 	{
@@ -2697,10 +2730,16 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 		{
 			// PSilent mode: don't change view visually, only send angles via command
 			// Camera stays where it is, but angles are applied to usercmd
-			char cmd[128];
+			// ИСПРАВЛЕНИЕ ПРОБЛЕМЫ: Применяем углы каждый кадр для стабильной работы
+			// Проблема была в том, что команды применялись не каждый кадр или с задержкой
+			// Теперь углы применяются каждый кадр пока есть цель
+			char cmd[256];
 			Q_snprintf( cmd, sizeof( cmd ), "kek_internal_psilent %f %f %f\n",
 				aim_angles[0], aim_angles[1], aim_angles[2] );
 			gEngfuncs.Cbuf_InsertText( cmd );
+			
+			// ВАЖНО: НЕ изменяем rvp->viewangles для psilent - камера должна оставаться на месте
+			// Углы применяются только через команду к usercmd
 		}
 		else
 		{
@@ -2712,8 +2751,257 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 			Q_snprintf( cmd, sizeof( cmd ), "kek_internal_setang %f %f %f\n",
 				aim_angles[0], aim_angles[1], aim_angles[2] );
 			gEngfuncs.Cbuf_InsertText( cmd );
+			
+			// Сбрасываем флаг psilent когда используем normal mode
+			// Это предотвращает применение старых psilent углов
+			char reset_cmd[64];
+			Q_snprintf( reset_cmd, sizeof( reset_cmd ), "kek_internal_psilent_reset\n" );
+			gEngfuncs.Cbuf_InsertText( reset_cmd );
+		}
+		
+		// Сбрасываем antiaim когда aimbot активен и есть цель
+		// Antiaim не должен работать когда мы целимся
+		if( kek_antiaim.value )
+		{
+			char cmd[64];
+			Q_snprintf( cmd, sizeof( cmd ), "kek_internal_antiaim_reset\n" );
+			gEngfuncs.Cbuf_InsertText( cmd );
+		}
+		
+	}
+	else
+	{
+		// Aimbot включен, но нет цели - применяем antiaim
+		if( kek_antiaim.value )
+		{
+			kek_ApplyAntiAim( rvp );
+		}
+		else
+		{
+			// Сбрасываем флаг antiaim когда antiaim выключен
+			char cmd[64];
+			Q_snprintf( cmd, sizeof( cmd ), "kek_internal_antiaim_reset\n" );
+			gEngfuncs.Cbuf_InsertText( cmd );
 		}
 	}
+}
+
+/*
+================
+kek_ApplyAntiAim
+
+Apply antiaim with movement compensation
+Works with usercmd through commands (like psilent)
+================
+*/
+static void kek_ApplyAntiAim( ref_viewpass_t *rvp )
+{
+	float antiaim_enabled, antiaim_mode, antiaim_speed, antiaim_jitter_range, antiaim_fake_angle;
+	vec3_t view_angles;
+	
+	// Get cvar values
+	antiaim_enabled = kek_antiaim.value;
+	if( !antiaim_enabled )
+		return;
+	
+	antiaim_mode = kek_antiaim_mode.value;
+	antiaim_speed = kek_antiaim_speed.value;
+	antiaim_jitter_range = kek_antiaim_jitter_range.value;
+	antiaim_fake_angle = kek_antiaim_fake_angle.value;
+	
+	// Get local player entity
+	cl_entity_t *local_player = kek_GetLocalPlayerEntity();
+	if( !local_player )
+		return;
+	
+	// Check if player is alive
+	if( !kek_IsPlayerAlive( local_player ))
+		return;
+	
+	// Check if player has grenade in hands - antiaim doesn't work with grenades
+	// Grenades require precise aiming for proper throwing
+	if( local_player->curstate.weaponmodel > 0 )
+	{
+		model_t *weapon_model = CL_ModelHandle( local_player->curstate.weaponmodel );
+		if( weapon_model && weapon_model->name )
+		{
+			const char *weapon_name = weapon_model->name;
+			// Check for grenade models
+			if( Q_strstr( weapon_name, "hegrenade" ) || 
+			    Q_strstr( weapon_name, "flashbang" ) || 
+			    Q_strstr( weapon_name, "smokegrenade" ) ||
+			    Q_strstr( weapon_name, "grenade" ))
+			{
+				// Grenade in hands - don't apply antiaim
+				return;
+			}
+		}
+	}
+	
+	// Get current view angles
+	VectorCopy( rvp->viewangles, view_angles );
+	
+	// Apply antiaim based on mode
+	switch( (int)antiaim_mode )
+	{
+	case 0: // Jitter - fast angle jittering
+		{
+			float jitter_yaw = ((float)(rand() % (int)(antiaim_jitter_range * 2.0f)) - antiaim_jitter_range);
+			float jitter_pitch = ((float)(rand() % (int)(antiaim_jitter_range * 2.0f)) - antiaim_jitter_range);
+			
+			view_angles[YAW] += jitter_yaw;
+			view_angles[PITCH] += jitter_pitch;
+		}
+		break;
+		
+	case 1: // Spin - rotation with movement compensation
+		{
+			static float spin_angle = 0.0f;
+			float current_time = gp_cl->time;
+			static float last_spin_time = 0.0f;
+			float delta_time = current_time - last_spin_time;
+			
+			if( delta_time > 0.1f ) delta_time = 0.1f;
+			if( delta_time < 0.0f ) delta_time = 0.0f;
+			
+			last_spin_time = current_time;
+			
+			spin_angle += antiaim_speed * delta_time;
+			if( spin_angle > 360.0f ) spin_angle -= 360.0f;
+			if( spin_angle < -360.0f ) spin_angle += 360.0f;
+			
+			view_angles[YAW] += spin_angle;
+		}
+		break;
+		
+	case 2: // Fake Angle - fake angle offset
+		{
+			float fake_yaw = view_angles[YAW] + antiaim_fake_angle;
+			
+			// Normalize
+			while( fake_yaw > 180.0f ) fake_yaw -= 360.0f;
+			while( fake_yaw < -180.0f ) fake_yaw += 360.0f;
+			
+			view_angles[YAW] = fake_yaw;
+		}
+		break;
+		
+	case 3: // Backwards - look backwards with movement compensation
+		{
+			float backwards_yaw = view_angles[YAW] + 180.0f;
+			
+			// Normalize
+			while( backwards_yaw > 180.0f ) backwards_yaw -= 360.0f;
+			while( backwards_yaw < -180.0f ) backwards_yaw += 360.0f;
+			
+			view_angles[YAW] = backwards_yaw;
+			view_angles[PITCH] = -view_angles[PITCH]; // Invert pitch
+		}
+		break;
+		
+	case 4: // Sideways - look sideways (90°)
+		{
+			float sideways_yaw = view_angles[YAW] + 90.0f;
+			
+			// Normalize
+			while( sideways_yaw > 180.0f ) sideways_yaw -= 360.0f;
+			while( sideways_yaw < -180.0f ) sideways_yaw += 360.0f;
+			
+			view_angles[YAW] = sideways_yaw;
+		}
+		break;
+		
+	case 5: // Legit AA - smooth movement (less noticeable)
+		{
+			static float legit_angle = 0.0f;
+			float current_time = gp_cl->time;
+			static float last_legit_time = 0.0f;
+			float delta_time = current_time - last_legit_time;
+			
+			if( delta_time > 0.1f ) delta_time = 0.1f;
+			if( delta_time < 0.0f ) delta_time = 0.0f;
+			
+			last_legit_time = current_time;
+			
+			// Slow smooth rotation
+			legit_angle += (antiaim_speed * 0.3f) * delta_time;
+			if( legit_angle > 360.0f ) legit_angle -= 360.0f;
+			if( legit_angle < -360.0f ) legit_angle += 360.0f;
+			
+			// Small deviation for more natural look
+			float angle_rad = legit_angle * M_PI_F / 180.0f;
+			float smooth_yaw = view_angles[YAW] + (sinf( angle_rad ) * antiaim_jitter_range);
+			
+			view_angles[YAW] = smooth_yaw;
+			view_angles[PITCH] += (cosf( angle_rad ) * (antiaim_jitter_range * 0.5f));
+		}
+		break;
+		
+	case 6: // Fast Spin - fast rotation with movement compensation
+		{
+			static float fast_spin_angle = 0.0f;
+			float current_time = gp_cl->time;
+			static float last_fast_spin_time = 0.0f;
+			float delta_time = current_time - last_fast_spin_time;
+			
+			if( delta_time > 0.1f ) delta_time = 0.1f;
+			if( delta_time < 0.0f ) delta_time = 0.0f;
+			
+			last_fast_spin_time = current_time;
+			
+			// Fast rotation (3x faster than normal)
+			fast_spin_angle += (antiaim_speed * 3.0f) * delta_time;
+			if( fast_spin_angle > 360.0f ) fast_spin_angle -= 360.0f;
+			if( fast_spin_angle < -360.0f ) fast_spin_angle += 360.0f;
+			
+			view_angles[YAW] += fast_spin_angle;
+		}
+		break;
+		
+	case 7: // Random - random angles each frame
+		{
+			float random_yaw = view_angles[YAW] + ((float)(rand() % (int)(antiaim_jitter_range * 2.0f)) - antiaim_jitter_range);
+			float random_pitch = view_angles[PITCH] + ((float)(rand() % (int)(antiaim_jitter_range * 2.0f)) - antiaim_jitter_range);
+			
+			// Clamp pitch
+			if( random_pitch > 89.0f ) random_pitch = 89.0f;
+			if( random_pitch < -89.0f ) random_pitch = -89.0f;
+			
+			view_angles[YAW] = random_yaw;
+			view_angles[PITCH] = random_pitch;
+		}
+		break;
+		
+	default:
+		// Default - jitter
+		{
+			float jitter_yaw = view_angles[YAW] + ((float)(rand() % (int)(antiaim_jitter_range * 2.0f)) - antiaim_jitter_range);
+			float jitter_pitch = view_angles[PITCH] + ((float)(rand() % (int)(antiaim_jitter_range * 2.0f)) - antiaim_jitter_range);
+			
+			view_angles[YAW] = jitter_yaw;
+			view_angles[PITCH] = jitter_pitch;
+		}
+		break;
+	}
+	
+	// Normalize angles
+	if( view_angles[PITCH] > 89.0f )
+		view_angles[PITCH] = 89.0f;
+	if( view_angles[PITCH] < -89.0f )
+		view_angles[PITCH] = -89.0f;
+	
+	while( view_angles[YAW] > 180.0f )
+		view_angles[YAW] -= 360.0f;
+	while( view_angles[YAW] < -180.0f )
+		view_angles[YAW] += 360.0f;
+	
+	// Apply antiaim angles via command (silent, like psilent)
+	// This modifies usercmd without changing visual view
+	// Применяем каждый кадр для стабильной работы
+	char cmd[256];
+	Q_snprintf( cmd, sizeof( cmd ), "kek_internal_antiaim %f %f %f\n",
+		view_angles[0], view_angles[1], view_angles[2] );
+	gEngfuncs.Cbuf_InsertText( cmd );
 }
 
 /*
