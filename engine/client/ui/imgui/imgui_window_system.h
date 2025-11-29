@@ -1,6 +1,13 @@
 #pragma once
-#include "imgui_window.h"
+// Include C++ standard library headers FIRST to avoid STL conflicts on Android
+// On Android NDK, we need to ensure we use the new libc++ and not the old STL
+#if __ANDROID__
+// Prevent inclusion of old STL headers that conflict with new libc++
+#define _LIBCPP_VERSION 1
+#endif
 #include <vector>
+
+#include "imgui_window.h"
 
 class CImGuiWindowSystem
 {

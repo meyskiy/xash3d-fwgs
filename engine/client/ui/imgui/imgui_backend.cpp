@@ -19,7 +19,7 @@ extern "C" {
 }
 
 #if __ANDROID__
-#include "ref/gl/gl_export.h"
+#include "gl_export.h"
 #else
 #if _WIN32
 #define HSPRITE DeletedWinapi_HSPRITE

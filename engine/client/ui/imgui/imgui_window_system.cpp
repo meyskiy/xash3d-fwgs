@@ -1,5 +1,10 @@
-#include "imgui_window_system.h"
+// Include C++ standard library headers FIRST, before any engine headers
+// This prevents conflicts between old STL and new libc++ on Android
+#include <vector>
+
+// Include imgui headers before engine headers to avoid STL conflicts
 #include "imgui.h"
+#include "imgui_window_system.h"
 #include "keydefs.h"
 
 // Include engine headers after imgui to avoid conflicts
