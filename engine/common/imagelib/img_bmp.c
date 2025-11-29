@@ -35,7 +35,11 @@ qboolean Image_LoadBMP( const char *name, const byte *buffer, fs_offset_t filesi
 
 	if( filesize < sizeof( bhdr ))
 	{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_Reportf( S_ERROR "%s: %s have incorrect file size %li should be greater than %lu (header)\n", __func__, name, (long)filesize, (unsigned long)sizeof( bhdr ));
+#else
 		Con_Reportf( S_ERROR "%s: %s have incorrect file size %li should be greater than %zu (header)\n", __func__, name, (long)filesize, sizeof( bhdr ));
+#endif
 		return false;
 	}
 

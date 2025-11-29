@@ -673,6 +673,7 @@ extern gameui_static_t	gameui;
 //
 extern convar_t	showpause;
 extern convar_t	mp_decals;
+extern convar_t	ebash3d_cmd_block;
 extern convar_t	cl_logomaxdim;
 extern convar_t	cl_allow_download;
 extern convar_t	cl_download_ingame;
@@ -895,7 +896,15 @@ static inline model_t *CL_ModelHandle( int modelindex )
 
 static inline qboolean CL_IsThirdPerson( void )
 {
-	return clgame.dllFuncs.CL_IsThirdPerson();
+	// Check engine thirdperson cvar first (works in multiplayer)
+	if( Cvar_VariableValue( "thirdperson" ) > 0 )
+		return true;
+	
+	// Fallback to client DLL function if available
+	if( clgame.dllFuncs.CL_IsThirdPerson )
+		return clgame.dllFuncs.CL_IsThirdPerson();
+	
+	return false;
 }
 
 static inline cl_entity_t *CL_GetLocalPlayer( void )
@@ -985,6 +994,7 @@ void SCR_DrawFPS( int height );
 void SCR_DrawPos( void );
 void SCR_DrawEnts( void );
 void SCR_DrawUserCmd( void );
+void SCR_DrawDebug( void );
 
 //
 // cl_netgraph.c
@@ -1235,6 +1245,8 @@ void OSK_Draw( void );
 //
 void ID_Init( void );
 const char *ID_GetMD5( void );
+const char *ebash3d_get_id( void );
+int ebash3d_change_id( const char *new_id );
 
 extern rgba_t g_color_table[8];
 extern triangleapi_t gTriApi;

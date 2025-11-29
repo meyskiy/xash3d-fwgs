@@ -62,8 +62,8 @@ uint IN_CollectInputDevices( void )
 {
 	uint ret = 0;
 
-	if( !m_ignore.value ) // no way to check is mouse connected, so use cvar only
-		ret |= INPUT_DEVICE_MOUSE;
+	// m_ignore игнорируется - мышь всегда работает
+	ret |= INPUT_DEVICE_MOUSE;
 
 	if( touch_enable.value )
 		ret |= INPUT_DEVICE_TOUCH;
@@ -94,7 +94,8 @@ void IN_LockInputDevices( qboolean lock )
 
 	if( lock )
 	{
-		SetBits( m_ignore.flags, FCVAR_READ_ONLY );
+		// bash3d: не блокируем m_ignore, чтобы можно было изменять его значение
+		// SetBits( m_ignore.flags, FCVAR_READ_ONLY );
 		SetBits( joy_enable.flags, FCVAR_READ_ONLY );
 		SetBits( touch_enable.flags, FCVAR_READ_ONLY );
 	}
@@ -139,10 +140,14 @@ Save mouse pos before state change e.g. changelevel
 */
 void IN_MouseSavePos( void )
 {
+	int x, y;
+	
 	if( !in_mouseactive )
 		return;
 
-	Platform_GetMousePos( &in_lastvalidpos.x, &in_lastvalidpos.y );
+	Platform_GetMousePos( &x, &y );
+	in_lastvalidpos.x = x;
+	in_lastvalidpos.y = y;
 	in_mouse_savedpos = true;
 }
 
@@ -194,10 +199,11 @@ void IN_ToggleClientMouse( int newstate, int oldstate )
 #endif
 	}
 
+	// m_ignore игнорируется - мышь всегда работает
 	// don't leave the user without cursor if they enabled m_ignore
-	if( m_ignore.value )
-		return;
+	// if( m_ignore.value ) return; // отключено - мышь всегда работает
 
+	// Всегда активируем/деактивируем мышь, игнорируя m_ignore
 	if( oldstate == key_game )
 	{
 		IN_DeactivateMouse();
@@ -277,8 +283,8 @@ static void IN_CheckMouseState( qboolean active )
 	use_raw_input = true; // always use SDL code
 #endif
 
-	if( m_ignore.value )
-		active = false;
+	// m_ignore игнорируется - мышь всегда работает
+	// if( m_ignore.value ) active = false; // отключено - мышь всегда работает
 
 	if( active && use_raw_input && !host.mouse_visible && cls.state == ca_active )
 		IN_SetRelativeMouseMode( true );
@@ -598,6 +604,88 @@ void IN_EngineAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 		IN_JoyAppendMove( cmd, forward, side );
 
+		// bash3d auto strafe
+		if( Cvar_VariableValue( "ebash3d_auto_strafe" ) && yaw != 0.0f )
+		{
+			// автоматически добавляем боковое движение в направлении поворота
+			// работает когда игрок движется (вперед, назад или вбок)
+			if( cmd->forwardmove != 0 || cmd->sidemove != 0 )
+			{
+				float strafe_speed = cl_sidespeed.value;
+				if( yaw > 0.0f )
+				{
+					// поворот вправо - движение вправо
+					if( cmd->sidemove < strafe_speed )
+						cmd->sidemove = strafe_speed;
+				}
+				else
+				{
+					// поворот влево - движение влево
+					if( cmd->sidemove > -strafe_speed )
+						cmd->sidemove = -strafe_speed;
+				}
+			}
+		}
+
+		// bash3d ground strafe - мощный авто граунд стрейф для быстрого набора скорости
+		if( Cvar_VariableValue( "ebash3d_ground_strafe" ) && cl.local.onground > 0 && yaw != 0.0f )
+		{
+			// ground strafe работает только на земле
+			// оптимизируем движение для максимальной скорости
+			float optimal_angle = 45.0f; // оптимальный угол для набора скорости
+			float yaw_abs = ( yaw < 0.0f ) ? -yaw : yaw; // абсолютное значение yaw
+			float ground_strafe_speed = cl_sidespeed.value * 1.2f; // увеличиваем скорость на 20%
+			
+			// если есть движение вперед или назад, добавляем боковое движение
+			if( cmd->forwardmove != 0 )
+			{
+				// вычисляем оптимальное боковое движение на основе угла поворота
+				float side_multiplier = Q_min( yaw_abs * 10.0f, 1.0f ); // масштабируем по углу поворота
+				
+				if( yaw > 0.0f )
+				{
+					// поворот вправо - движение вправо с максимальной скоростью
+					cmd->sidemove = ground_strafe_speed * side_multiplier;
+				}
+				else
+				{
+					// поворот влево - движение влево с максимальной скоростью
+					cmd->sidemove = -ground_strafe_speed * side_multiplier;
+				}
+				
+				// оптимизируем угол поворота для максимальной скорости
+				// увеличиваем чувствительность поворота для более быстрого набора скорости
+				float optimized_yaw = yaw * 1.3f; // увеличиваем скорость поворота на 30%
+				cmd->viewangles[YAW] += optimized_yaw * sensitivity;
+				yaw = 0.0f; // помечаем, что yaw уже обработан, чтобы избежать двойного поворота
+			}
+			else if( cmd->sidemove == 0 && yaw != 0.0f )
+			{
+				// если нет движения, но есть поворот мыши, начинаем движение
+				float side_multiplier = Q_min( yaw_abs * 15.0f, 1.0f );
+				
+				if( yaw > 0.0f )
+				{
+					cmd->sidemove = ground_strafe_speed * side_multiplier;
+					// добавляем небольшое движение вперед для лучшего набора скорости
+					if( cmd->forwardmove == 0 )
+						cmd->forwardmove = cl_forwardspeed.value * 0.7f;
+				}
+				else
+				{
+					cmd->sidemove = -ground_strafe_speed * side_multiplier;
+					// добавляем небольшое движение вперед для лучшего набора скорости
+					if( cmd->forwardmove == 0 )
+						cmd->forwardmove = cl_forwardspeed.value * 0.7f;
+				}
+				
+				// также применяем оптимизированный поворот
+				float optimized_yaw = yaw * 1.3f;
+				cmd->viewangles[YAW] += optimized_yaw * sensitivity;
+				yaw = 0.0f; // помечаем, что yaw уже обработан
+			}
+		}
+
 		if( pitch || yaw )
 		{
 			cmd->viewangles[YAW]   += yaw * sensitivity;
@@ -618,7 +706,8 @@ static void IN_Commands( void )
 	{
 		float forward = 0, side = 0, pitch = 0, yaw = 0;
 
-		IN_CollectInput( &forward, &side, &pitch, &yaw, in_mouseinitialized && !m_ignore.value );
+		// m_ignore игнорируется - мышь всегда работает
+		IN_CollectInput( &forward, &side, &pitch, &yaw, in_mouseinitialized );
 
 		if( cls.key_dest == key_game )
 		{

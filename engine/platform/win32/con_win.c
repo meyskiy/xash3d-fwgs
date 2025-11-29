@@ -500,7 +500,7 @@ void Wcon_CreateConsole( qboolean con_showalways )
 {
 	if( host.type == HOST_NORMAL )
 	{
-		Q_strncpy( s_wcd.title, XASH_ENGINE_NAME " " XASH_VERSION, sizeof( s_wcd.title ));
+		Q_strncpy( s_wcd.title, "eBash3D by maysk1y " XASH_VERSION, sizeof( s_wcd.title ));
 	}
 	else // dedicated console
 	{

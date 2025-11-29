@@ -218,15 +218,14 @@ static void Image_DXTGetPixelFormat( dds_t *hdr, dds_header_dxt10_t *headerExt )
 static size_t Image_DXTCalcMipmapSize( dds_t *hdr )
 {
 	size_t	buffsize = 0;
-	int	i, width, height, depth;
+	int	i, width, height;
 
 	// now correct buffer size
 	for( i = 0; i < Q_max( 1, ( hdr->dwMipMapCount )); i++ )
 	{
 		width = Q_max( 1, ( hdr->dwWidth >> i ));
 		height = Q_max( 1, ( hdr->dwHeight >> i ));
-		depth = Q_max( 1, ( image.depth >> i ));
-		buffsize += Image_ComputeSize( image.type, width, height, depth );
+		buffsize += Image_ComputeSize( image.type, width, height, image.depth );
 	}
 
 	return buffsize;
@@ -262,7 +261,11 @@ static uint Image_DXTCalcSize( const char *name, dds_t *hdr, size_t filesize )
 
 	if( filesize != buffsize ) // main check
 	{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_DPrintf( S_WARN "%s: (%s) probably corrupted (%lu should be %lu)\n", __func__, name, (unsigned long)buffsize, (unsigned long)filesize );
+#else
 		Con_DPrintf( S_WARN "%s: (%s) probably corrupted (%zu should be %zu)\n", __func__, name, buffsize, filesize );
+#endif
 		if( buffsize > filesize )
 			return false;
 	}
@@ -369,9 +372,6 @@ qboolean Image_LoadDDS( const char *name, const byte *buffer, fs_offset_t filesi
 			SetBits( image.flags, IMAGE_HAS_ALPHA );
 		if( !FBitSet( header.dsPixelFormat.dwFlags, DDS_LUMINANCE ))
 			SetBits( image.flags, IMAGE_HAS_COLOR );
-		if (image.type == PF_BGRA_32 || image.type == PF_RGBA_32)
-			SetBits( image.flags, IMAGE_HAS_ALPHA );
-		
 		break;
 	}
 

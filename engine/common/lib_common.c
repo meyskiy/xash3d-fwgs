@@ -81,7 +81,11 @@ void *COM_FunctionFromName_SR( void *hInstance, const char *pName )
 const char *COM_OffsetNameForFunction( void *function )
 {
 	static string sname;
+#if defined(__MINGW32__) || defined(__MINGW64__)
+	Q_snprintf( sname, MAX_STRING, "ofs:%lu", (unsigned long)((byte*)function - (byte*)svgame.dllFuncs.pfnGameInit ));
+#else
 	Q_snprintf( sname, MAX_STRING, "ofs:%zu", (size_t)((byte*)function - (byte*)svgame.dllFuncs.pfnGameInit ));
+#endif
 	Con_Reportf( "%s: %s\n", __func__, sname );
 	return sname;
 }

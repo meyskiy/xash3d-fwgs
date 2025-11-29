@@ -467,7 +467,11 @@ void Mem_PrintStats( void )
 		realsize += pool->realsize;
 	}
 
+#if defined(__MINGW32__) || defined(__MINGW64__)
+	Con_Printf( "^3%lu^7 memory pools, totalling: ^1%s\n", (unsigned long)count, Q_memprint( size ));
+#else
 	Con_Printf( "^3%zu^7 memory pools, totalling: ^1%s\n", count, Q_memprint( size ));
+#endif
 	Con_Printf( "total allocated size: ^1%s\n", Q_memprint( realsize ));
 }
 

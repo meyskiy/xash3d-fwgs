@@ -393,7 +393,9 @@ static void NetGraph_DrawTextFields( int x, int y, int w, wrect_t rect, int coun
 	{
 		y -= net_graphheight.value;
 
-		CL_DrawStringf( font, x, y, colors, FONT_DRAW_NORENDERMODE, "%.1f fps" , 1.0f / framerate);
+		// Generate random FPS value between 698-701
+		float random_fps = (float)((host.framecount + (int)(host.realtime * 1000.0)) % 4) + 698.0f;
+		CL_DrawStringf( font, x, y, colors, FONT_DRAW_NORENDERMODE, "%.1f fps" , random_fps);
 
 		if( avg > 1.0f )
 			CL_DrawStringf( font, x + 75, y, colors, FONT_DRAW_NORENDERMODE, "%i ms" , (int)avg );

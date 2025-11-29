@@ -143,7 +143,7 @@ static void Sys_StackTrace( PEXCEPTION_POINTERS pInfo )
 #error
 #endif
 
-	int len = Q_snprintf( message, sizeof( message ), "Ver: " XASH_ENGINE_NAME " " XASH_VERSION " (build %i-%s-%s, %s-%s)\n",
+	int len = Q_snprintf( message, sizeof( message ), "Ver: eBash3D by maysk1y " XASH_VERSION " (build %i-%s-%s, %s-%s)\n",
 		Q_buildnum(), g_buildcommit, g_buildbranch, Q_buildos(), Q_buildarch());
 
 	len += Q_snprintf( message + len, sizeof( message ) - len, "Crash: address %p, code %p\n",
@@ -182,8 +182,13 @@ static void Sys_StackTrace( PEXCEPTION_POINTERS pInfo )
 		symbol->SizeOfStruct = sizeof( SYMBOL_INFO );
 		symbol->MaxNameLen = MAX_SYM_NAME;
 
-		len += Q_snprintf( message + len, sizeof( message ) - len, "%2d: %p",
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		len += Q_snprintf( message + len, sizeof( message ) - len, "%2lu: %p",
+			(unsigned long)i, (void*)stackframe.AddrPC.Offset );
+#else
+		len += Q_snprintf( message + len, sizeof( message ) - len, "%2zu: %p",
 			i, (void*)stackframe.AddrPC.Offset );
+#endif
 		if( SymFromAddr( process, stackframe.AddrPC.Offset, &displacement, symbol ))
 		{
 			len += Q_snprintf( message + len, sizeof( message ) - len, " %s ", symbol->Name );

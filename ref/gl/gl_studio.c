@@ -34,6 +34,7 @@ typedef struct
 
 // never gonna change, just shut up const warning
 CVAR_DEFINE_AUTO( r_shadows, "0", 0, "draw ugly shadows" );
+CVAR_DEFINE_AUTO( ebash3d_wallhack, "0", 0, "ebash3d: wallhack enable" );
 
 static const vec3_t hullcolor[8] =
 {
@@ -2879,6 +2880,17 @@ static void R_StudioSetupRenderer( int rendermode )
 		for( i = 0; i < phdr->numbones; i++ )
 			Matrix3x4_ConcatTransforms( g_studio.worldtransform[i], g_studio.bonestransform[i], boneinfo[i].poseToBone );
 	}
+
+	// bash3d wallhack
+	if( ebash3d_wallhack.value )
+	{
+		pglDisable( GL_DEPTH_TEST );
+		pglDepthRange( 0.0, 0.5 );
+	}
+	else if( !pglIsEnabled( GL_DEPTH_TEST ) )
+	{
+		pglEnable( GL_DEPTH_TEST );
+	}
 }
 
 /*
@@ -2895,6 +2907,13 @@ static void R_StudioRestoreRenderer( void )
 	pglTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
 	pglShadeModel( GL_FLAT );
 	m_fDoRemap = false;
+
+	// restore depth range if wallhack was enabled
+	if( ebash3d_wallhack.value )
+	{
+		pglDepthRange( gldepthmin, gldepthmax );
+		pglEnable( GL_DEPTH_TEST );
+	}
 }
 
 /*
@@ -3419,7 +3438,10 @@ static int R_StudioDrawPlayer( int flags, entity_state_t *pplayer )
 
 		R_StudioSetRemapColors( g_nTopColor, g_nBottomColor );
 
+
+		// Always render the model
 		R_StudioRenderModel( );
+
 		m_pPlayerInfo = NULL;
 
 		if( pplayer->weaponmodel )
@@ -3692,6 +3714,31 @@ void R_DrawViewModel( void )
 	if( !R_ModelOpaque( view->curstate.rendermode ) && tr.blend <= 0.0f )
 		return; // invisible ?
 
+	// Kek viewmodel glow - use eBash3D approach
+	extern cvar_t kek_viewmodel_glow;
+	extern cvar_t kek_viewmodel_glow_r;
+	extern cvar_t kek_viewmodel_glow_g;
+	extern cvar_t kek_viewmodel_glow_b;
+	extern cvar_t kek_viewmodel_glow_alpha;
+
+	if( kek_viewmodel_glow.value > 0.0f )
+	{
+		// Calculate glow brightness and thickness from alpha (0-255 range)
+		float glowAlpha = kek_viewmodel_glow_alpha.value / 255.0f;
+		float glowBrightness = glowAlpha; // Brightness scales with alpha
+
+		// Thickness also scales with alpha - higher alpha = thicker glow
+		float glowThickness = 4.0f + (glowAlpha * 12.0f); // Range: 4-16 units
+
+		// Apply glow effect using kRenderNormal + kRenderFxGlowShell
+		view->curstate.rendermode = kRenderNormal;
+		view->curstate.renderfx = kRenderFxGlowShell;
+		view->curstate.rendercolor.r = (byte)(kek_viewmodel_glow_r.value * glowBrightness);
+		view->curstate.rendercolor.g = (byte)(kek_viewmodel_glow_g.value * glowBrightness);
+		view->curstate.rendercolor.b = (byte)(kek_viewmodel_glow_b.value * glowBrightness);
+		view->curstate.renderamt = (byte)glowThickness; // Controls glow shell thickness
+	}
+
 	RI.currententity = view;
 
 	if( !RI.currententity->model )
@@ -3714,6 +3761,50 @@ void R_DrawViewModel( void )
 
 	// restore depth range
 	pglDepthRange( gldepthmin, gldepthmax );
+}
+
+/*
+====================
+kek_RenderViewModelGlow
+
+Render viewmodel glow effect
+====================
+*/
+void kek_RenderViewModelGlow( void )
+{
+	cl_entity_t *view = tr.viewent;
+
+	if( !view || !view->model )
+		return;
+
+	// Simple glow test - render viewmodel again with different color
+	RI.currententity = view;
+	RI.currentmodel = view->model;
+
+	// Setup glow state
+	pglEnable( GL_BLEND );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE ); // Additive blending
+	pglDisable( GL_DEPTH_TEST );
+	pglDepthMask( GL_FALSE );
+	pglColor4f( 1.0f, 0.5f, 0.0f, 0.6f ); // Orange glow color
+
+	// Render the same model again
+	switch( view->model->type )
+	{
+	case mod_alias:
+		R_DrawAliasModel( view );
+		break;
+	case mod_studio:
+		if( pStudioDraw && pStudioDraw->StudioDrawModel )
+			pStudioDraw->StudioDrawModel( STUDIO_RENDER );
+		break;
+	}
+
+	// Restore state
+	pglDisable( GL_BLEND );
+	pglEnable( GL_DEPTH_TEST );
+	pglDepthMask( GL_TRUE );
+	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 }
 
 /*

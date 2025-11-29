@@ -805,23 +805,22 @@ Create entity patch for selected map
 */
 void SV_WriteEntityPatch( const char *filename )
 {
-	int         lumpofs = 0, lumplen = 0;
-	byte        buf[MAX_TOKEN] = { 0 }; // 1 kb
-	string      bspfilename;
-	dlump_t     entities;
-	file_t      *f;
-	fs_offset_t filelen;
+	int		lumpofs = 0, lumplen = 0;
+	byte		buf[MAX_TOKEN]; // 1 kb
+	string		bspfilename;
+	dlump_t entities;
+	file_t		*f;
 
 	Q_snprintf( bspfilename, sizeof( bspfilename ), "maps/%s.bsp", filename );
 
 	f = FS_Open( bspfilename, "rb", false );
-	if( !f )
-		return;
+	if( !f ) return;
 
-	filelen = FS_Read( f, buf, MAX_TOKEN );
+	memset( buf, 0, MAX_TOKEN );
+	FS_Read( f, buf, MAX_TOKEN );
 
 	// check all the lumps and some other errors
-	if( !Mod_TestBmodelLumps( f, bspfilename, buf, filelen, true, &entities ))
+	if( !Mod_TestBmodelLumps( f, bspfilename, buf, true, &entities ))
 	{
 		FS_Close( f );
 		return;
@@ -854,28 +853,27 @@ pfnMapIsValid use this
 */
 static char *SV_ReadEntityScript( const char *filename, int *flags )
 {
-	string      bspfilename, entfilename;
-	int         lumpofs = 0, lumplen = 0;
-	byte        buf[MAX_TOKEN] = { 0 };
-	char        *ents = NULL;
-	dlump_t     entities;
-	size_t      ft1, ft2;
-	file_t      *f;
-	fs_offset_t filelen;
+	string		bspfilename, entfilename;
+	int		lumpofs = 0, lumplen = 0;
+	byte		buf[MAX_TOKEN];
+	char		*ents = NULL;
+	dlump_t entities;
+	size_t		ft1, ft2;
+	file_t		*f;
 
 	*flags = 0;
 
 	Q_snprintf( bspfilename, sizeof( bspfilename ), "maps/%s.bsp", filename );
 
 	f = FS_Open( bspfilename, "rb", false );
-	if( !f )
-		return NULL;
+	if( !f ) return NULL;
 
 	SetBits( *flags, MAP_IS_EXIST );
-	filelen = FS_Read( f, buf, sizeof( buf ));
+	memset( buf, 0, MAX_TOKEN );
+	FS_Read( f, buf, MAX_TOKEN );
 
 	// check all the lumps and some other errors
-	if( !Mod_TestBmodelLumps( f, bspfilename, buf, filelen, (host_developer.value) ? false : true, &entities ))
+	if( !Mod_TestBmodelLumps( f, bspfilename, buf, (host_developer.value) ? false : true, &entities ))
 	{
 		SetBits( *flags, MAP_INVALID_VERSION );
 		FS_Close( f );
@@ -3303,11 +3301,19 @@ void SV_PrintStr64Stats_f( void )
 	Con_Printf( "====================\n" );
 	Con_Printf( "64 bit string pool statistics\n" );
 	Con_Printf( "====================\n" );
+#if defined(__MINGW32__) || defined(__MINGW64__)
+	Con_Printf( "string array size: %llu\n", (unsigned long long)str64.maxstringarray );
+	Con_Printf( "total alloc %llu\n", (unsigned long long)str64.totalalloc );
+	Con_Printf( "maximum array usage: %llu\n", (unsigned long long)str64.maxalloc );
+	Con_Printf( "overflow counter: %llu\n", (unsigned long long)str64.numoverflows );
+	Con_Printf( "dup string counter: %llu\n", (unsigned long long)str64.numdups );
+#else
 	Con_Printf( "string array size: %lu\n", str64.maxstringarray );
 	Con_Printf( "total alloc %lu\n", str64.totalalloc );
 	Con_Printf( "maximum array usage: %lu\n", str64.maxalloc );
 	Con_Printf( "overflow counter: %lu\n", str64.numoverflows );
 	Con_Printf( "dup string counter: %lu\n", str64.numdups );
+#endif
 #else // !XASH_64BIT
 	Con_Printf( "Not implemented\n" );
 #endif // !XASH_64BIT

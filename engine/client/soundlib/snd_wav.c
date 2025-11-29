@@ -104,7 +104,11 @@ static void FindNextChunk( const char *filename, const char *name )
 				|| IsFourCC( iff_lastChunk, "LIST" )
 				|| IsFourCC( iff_lastChunk, "data" ))
 			{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+				Con_DPrintf( "%s: '%s' truncated by %ld bytes\n", __func__, filename, (long)(iff_chunkLen - remaining) );
+#else
 				Con_DPrintf( "%s: '%s' truncated by %td bytes\n", __func__, filename, iff_chunkLen - remaining );
+#endif
 			}
 			iff_chunkLen = remaining;
 		}

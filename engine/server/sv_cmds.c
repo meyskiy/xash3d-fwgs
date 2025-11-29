@@ -768,7 +768,11 @@ static void SV_ServerInfo_f( void )
 	{
 		Con_Printf( "Server info settings:\n" );
 		Info_Print( svs.serverinfo );
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_Printf( "Total %lu symbols\n", (unsigned long)Q_strlen( svs.serverinfo ));
+#else
 		Con_Printf( "Total %zu symbols\n", Q_strlen( svs.serverinfo ));
+#endif
 		return;
 	}
 
@@ -810,7 +814,11 @@ static void SV_LocalInfo_f( void )
 	{
 		Con_Printf( "Local info settings:\n" );
 		Info_Print( svs.localinfo );
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_Printf( "Total %lu symbols\n", (unsigned long)Q_strlen( svs.localinfo ));
+#else
 		Con_Printf( "Total %zu symbols\n", Q_strlen( svs.localinfo ));
+#endif
 		return;
 	}
 

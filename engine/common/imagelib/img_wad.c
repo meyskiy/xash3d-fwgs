@@ -32,7 +32,11 @@ qboolean Image_LoadPAL( const char *name, const byte *buffer, fs_offset_t filesi
 
 	if( filesize > sizeof( pal ))
 	{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_DPrintf( S_ERROR "%s: (%s) have invalid size (%li should be less or equal than %lu)\n", __func__, name, (long)filesize, (unsigned long)sizeof( pal ));
+#else
 		Con_DPrintf( S_ERROR "%s: (%s) have invalid size (%li should be less or equal than %zu)\n", __func__, name, (long)filesize, sizeof( pal ));
+#endif
 		return false;
 	}
 	else if( filesize < sizeof( pal ) && buffer != NULL )

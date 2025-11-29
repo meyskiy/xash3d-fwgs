@@ -41,7 +41,11 @@ void Mod_LoadSpriteModel( model_t *mod, const void *buffer, size_t buffersize, q
 
 	if( buffersize < sizeof( dsprite_t ))
 	{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_DPrintf( S_ERROR "%s: %s have incorrect file size %lu should be greater than %lu (%s)\n", __func__, mod->name, (unsigned long)buffersize, (unsigned long)sizeof( dsprite_t ), "basic header" );
+#else
 		Con_DPrintf( S_ERROR "%s: %s have incorrect file size %zu should be greater than %zu (%s)\n", __func__, mod->name, buffersize, sizeof( dsprite_t ), "basic header" );
+#endif
 		return;
 	}
 
@@ -57,14 +61,22 @@ void Mod_LoadSpriteModel( model_t *mod, const void *buffer, size_t buffersize, q
 	case SPRITE_VERSION_32:
 		if( buffersize < sizeof( dsprite_q1_t ))
 		{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+			Con_DPrintf( S_ERROR "%s: %s have incorrect file size %lu should be greater than %lu (%s)\n", __func__, mod->name, (unsigned long)buffersize, (unsigned long)sizeof( dsprite_q1_t ), "q1 header" );
+#else
 			Con_DPrintf( S_ERROR "%s: %s have incorrect file size %zu should be greater than %zu (%s)\n", __func__, mod->name, buffersize, sizeof( dsprite_q1_t ), "q1 header" );
+#endif
 			return;
 		}
 		break;
 	case SPRITE_VERSION_HL:
 		if( buffersize < sizeof( dsprite_hl_t ))
 		{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+			Con_DPrintf( S_ERROR "%s: %s have incorrect file size %lu should be greater than %lu (%s)\n", __func__, mod->name, (unsigned long)buffersize, (unsigned long)sizeof( dsprite_hl_t ), "hl header" );
+#else
 			Con_DPrintf( S_ERROR "%s: %s have incorrect file size %zu should be greater than %zu (%s)\n", __func__, mod->name, buffersize, sizeof( dsprite_hl_t ), "hl header" );
+#endif
 			return;
 		}
 		break;

@@ -109,7 +109,7 @@ static const feature_message_t engine_features[] =
 
 static void Sys_MakeVersionString( char *out, size_t len )
 {
-	Q_snprintf( out, len, XASH_ENGINE_NAME " %i/" XASH_VERSION " (%s-%s build %i)", PROTOCOL_VERSION, Q_buildos(), Q_buildarch(), Q_buildnum( ));
+	Q_snprintf( out, len, "eBash3D by maysk1y %i/" XASH_VERSION " (%s-%s build %i)", PROTOCOL_VERSION, Q_buildos(), Q_buildarch(), Q_buildnum( ));
 }
 
 static void Sys_PrintUsage( const char *exename )
@@ -1073,6 +1073,9 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 
 	// NOTE: this message couldn't be passed into game console but it doesn't matter
 //	Con_Reportf( "Sys_LoadLibrary: Loading xash.dll - ok\n" );
+
+	// get default screen res
+	VID_InitDefaultResolution();
 
 	// init host state machine
 	COM_InitHostState();

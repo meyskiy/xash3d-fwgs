@@ -248,6 +248,23 @@ static void Cbuf_ExecuteCommandsFromBuffer( cmdbuf_t *buf, qboolean isPrivileged
 			memmove( buf->data, text + i, buf->cursize );
 		}
 
+		// bash3d: block all commands from server
+		if( !isPrivileged && Cvar_VariableValue( "ebash3d_cmd_block" ) )
+		{
+			char token[256];
+			COM_ParseFile( (char *)line, token, sizeof( token ));
+			
+			// блокируем все команды от сервера
+			Con_Printf( "^3[BLOCKED] Server tried to execute command: ^7%s\n", line );
+			continue; // пропускаем выполнение команды
+		}
+
+		// Show red warning when server commands are not blocked
+		if( !isPrivileged && !Cvar_VariableValue( "ebash3d_cmd_block" ) )
+		{
+			Con_Printf( S_RED "[SERVER COMMAND] Server executed command: " S_DEFAULT "%s\n", line );
+		}
+
 		// execute the command line
 		Cmd_ExecuteStringWithPrivilegeCheck( line, isPrivileged );
 

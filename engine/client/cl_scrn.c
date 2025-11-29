@@ -34,6 +34,8 @@ static CVAR_DEFINE_AUTO( cl_showfps, "0", FCVAR_ARCHIVE, "show client fps" );
 static CVAR_DEFINE_AUTO( cl_showpos, "0", FCVAR_ARCHIVE, "show local player position and velocity" );
 static CVAR_DEFINE_AUTO( cl_showents, "0", FCVAR_ARCHIVE | FCVAR_CHEAT, "show entities information (largely undone)" );
 static CVAR_DEFINE_AUTO( cl_showcmd, "0", 0, "visualize usercmd button presses" );
+static CVAR_DEFINE_AUTO( cl_debug, "0", FCVAR_ARCHIVE, "show client debug info (0=off, 1=minimal, 2=current client, 3=all clients, 4=KEK aim stats)" );
+CVAR_DEFINE_AUTO( thirdperson, "0", FCVAR_ARCHIVE, "enable thirdperson camera view" );
 
 typedef struct
 {
@@ -85,6 +87,9 @@ void SCR_DrawFPS( int height )
 	calc = framerate;
 	framecount++;
 
+	// Generate random FPS value between 698-701
+	int random_fps = ((host.framecount + (int)(host.realtime * 1000.0)) % 4) + 698;
+
 	if( calc < 1.0f )
 	{
 		Q_snprintf( fpsstring, sizeof( fpsstring ), "%4i spf", (int)(1.0f / calc + 0.5f));
@@ -92,7 +97,7 @@ void SCR_DrawFPS( int height )
 	}
 	else
 	{
-		int	curfps = (int)(calc + 0.5f);
+		int	curfps = random_fps; // Use random FPS instead of real
 
 		if( curfps < minfps ) minfps = curfps;
 		if( curfps > maxfps ) maxfps = curfps;
@@ -199,6 +204,361 @@ void SCR_DrawEnts( void )
 			screen[1] += 0.5f * refState.height;
 
 			Con_DrawString( screen[0], screen[1], msg, color );
+		}
+	}
+}
+
+/*
+==============
+SCR_DrawDebug
+
+show client debug information based on cl_debug value
+0 = disabled
+1 = minimal info (FPS, map name)
+2 = current client info (detailed)
+3 = all clients info (aim at player)
+==============
+*/
+void SCR_DrawDebug( void )
+{
+	rgba_t color, fps_color;
+	cl_font_t *font;
+	string msg;
+	int debug_mode;
+	cl_entity_t *localPlayer;
+	float fps;
+	int xpos;
+	int line_height, y;
+	static const unsigned char colors[4][3] = {
+		{255, 0, 0},    // red
+		{255, 255, 0},  // yellow
+		{0, 255, 0},    // green
+		{255, 255, 255} // white
+	};
+
+	if( cls.state != ca_active || cl.background )
+		return;
+
+	debug_mode = (int)cl_debug.value;
+	if( debug_mode <= 0 )
+		return;
+
+	localPlayer = CL_GetLocalPlayer();
+	if( !localPlayer )
+		return;
+
+	font = Con_GetCurFont();
+	if( !font )
+		return;
+
+	xpos = (int)(refState.width / 1.4f);
+	line_height = font->charHeight + 2;
+
+	if( debug_mode >= 4 )
+	{
+		// KEK рендерер сам выводит подробный HUD при cl_debug 4,
+		// поэтому здесь ничего не рисуем, чтобы не мешать его информации.
+		return;
+	}
+	
+	// Generate random FPS value between 698-701 using framecount for pseudo-randomness
+	fps = (float)((host.framecount + (int)(host.realtime * 1000.0)) % 4) + 698.0f;
+
+	// Get color for FPS based on value
+	if( fps > 59 )
+		MakeRGBA( fps_color, colors[2][0], colors[2][1], colors[2][2], 255 );
+	else if( fps > 29 )
+		MakeRGBA( fps_color, colors[1][0], colors[1][1], colors[1][2], 255 );
+	else
+		MakeRGBA( fps_color, colors[0][0], colors[0][1], colors[0][2], 255 );
+
+	// Mode 1: Minimal info - always show FPS
+	if( debug_mode >= 1 )
+	{
+		y = line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "FPS: %.0f", fps );
+		CL_DrawString( xpos, y, msg, fps_color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Frame Time: %.0f ms", 1000.0f / fps );
+		CL_DrawString( xpos, y, msg, fps_color, font, FONT_DRAW_HUD );
+		y += line_height * 2;
+
+		MakeRGBA( color, colors[3][0], colors[3][1], colors[3][2], 255 );
+
+		if( clgame.mapname[0] )
+			Q_snprintf( msg, sizeof( msg ), "Map: %s", clgame.mapname );
+		else
+			Q_snprintf( msg, sizeof( msg ), "Map: (not loaded)" );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height * 2;
+
+		if( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS && cl.players[cl.playernum].name[0] )
+		{
+			Q_snprintf( msg, sizeof( msg ), "Name: %s", cl.players[cl.playernum].name );
+			CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			y += line_height;
+
+			Q_snprintf( msg, sizeof( msg ), "Index: %d", localPlayer->index );
+			CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			y += line_height;
+
+			// Show model name if available
+			if( cl.players[cl.playernum].model[0] )
+			{
+				Q_snprintf( msg, sizeof( msg ), "Model: %s", cl.players[cl.playernum].model );
+				CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			}
+		}
+
+		// Show debug mode indicator
+		y += line_height * 2;
+		Q_snprintf( msg, sizeof( msg ), "Debug mode: " );
+		int debugModeWidth;
+		CL_DrawStringLen( font, msg, &debugModeWidth, NULL, FONT_DRAW_HUD );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		
+		MakeRGBA( color, 0, 255, 0, 255 );
+		switch( debug_mode )
+		{
+			case 1:
+				Q_snprintf( msg, sizeof( msg ), "1 (Minimal Info)" );
+				break;
+			case 2:
+				Q_snprintf( msg, sizeof( msg ), "2 (Current Client Info)" );
+				break;
+			case 3:
+				Q_snprintf( msg, sizeof( msg ), "3 (All Clients Info)" );
+				break;
+			default:
+				Q_snprintf( msg, sizeof( msg ), "%d (UNKNOWN)", debug_mode );
+				MakeRGBA( color, 255, 0, 0, 255 );
+				break;
+		}
+		CL_DrawString( xpos + debugModeWidth, y, msg, color, font, FONT_DRAW_HUD );
+	}
+
+	// Mode 2: Current client detailed info
+	if( debug_mode >= 2 )
+	{
+		float speed;
+		vec3_t velocity_2d;
+		
+		MakeRGBA( color, colors[3][0], colors[3][1], colors[3][2], 255 );
+		y = line_height * 13;
+
+		// Get velocity from pmove if available, otherwise use simvel
+		if( clgame.pmove )
+		{
+			velocity_2d[0] = clgame.pmove->velocity[0];
+			velocity_2d[1] = clgame.pmove->velocity[1];
+			velocity_2d[2] = 0.0f;
+			speed = (float)Q_rint( VectorLength( velocity_2d ));
+			Q_snprintf( msg, sizeof( msg ), "Velocity: %.2f u/s (%.2f, %.2f, %.2f)", 
+				speed, clgame.pmove->velocity[0], clgame.pmove->velocity[1], clgame.pmove->velocity[2] );
+		}
+		else
+		{
+			speed = VectorLength( cl.simvel );
+			Q_snprintf( msg, sizeof( msg ), "Velocity: %.2f u/s (%.2f, %.2f, %.2f)", 
+				speed, cl.simvel[0], cl.simvel[1], cl.simvel[2] );
+		}
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Origin: (%.2f, %.2f, %.2f)", 
+			localPlayer->origin[0], localPlayer->origin[1], localPlayer->origin[2] );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Angles: (%.2f, %.2f, %.2f)", 
+			localPlayer->angles[0], localPlayer->angles[1], localPlayer->angles[2] );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		if( clgame.pmove )
+		{
+			Q_snprintf( msg, sizeof( msg ), "Movetype: %d", localPlayer->curstate.movetype );
+			CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			y += line_height;
+
+			Q_snprintf( msg, sizeof( msg ), "Hull Type: %d", clgame.pmove->usehull );
+			CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			y += line_height;
+
+			Q_snprintf( msg, sizeof( msg ), "Gravity: %.2f", clgame.pmove->gravity );
+			CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			y += line_height;
+
+			Q_snprintf( msg, sizeof( msg ), "Friction: %.2f", clgame.pmove->friction );
+			CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			y += line_height;
+
+			Q_snprintf( msg, sizeof( msg ), "On Ground: %s", clgame.pmove->onground > 0 ? "yes" : "no" );
+			CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+			y += line_height;
+		}
+
+		Q_snprintf( msg, sizeof( msg ), "Anim. Frame: %.1f", localPlayer->curstate.frame );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Anim. Sequence: %d", localPlayer->curstate.sequence );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Bodygroup Number: %d", localPlayer->curstate.body );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Skin Number: %d", localPlayer->curstate.skin );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Health: %d", localPlayer->curstate.health );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+		y += line_height;
+
+		Q_snprintf( msg, sizeof( msg ), "Team: %d", localPlayer->curstate.team );
+		CL_DrawString( xpos, y, msg, color, font, FONT_DRAW_HUD );
+	}
+
+	// Mode 3: All clients info - trace from camera to find player
+	if( debug_mode >= 3 )
+	{
+		vec3_t viewOrigin, viewDir, traceEnd;
+		pmtrace_t trace;
+		cl_entity_t *targetPlayer = NULL;
+		int ClientIndex = 0;
+		const float lineLen = 11590.0f;
+
+		MakeRGBA( color, colors[3][0], colors[3][1], colors[3][2], 255 );
+
+		// Get view origin and angles
+		VectorCopy( localPlayer->origin, viewOrigin );
+		VectorCopy( refState.viewangles, viewDir );
+		AngleVectors( viewDir, viewDir, NULL, NULL );
+
+		// Trace to find player entity
+		VectorMA( viewOrigin, lineLen, viewDir, traceEnd );
+		trace = CL_TraceLine( viewOrigin, traceEnd, PM_STUDIO_BOX );
+
+		// Get entity index from trace
+		if( clgame.pmove && trace.ent >= 0 && trace.ent < clgame.pmove->numphysent )
+		{
+			ClientIndex = clgame.pmove->physents[trace.ent].info;
+			if( ClientIndex > 0 && ClientIndex < clgame.maxEntities )
+			{
+				cl_entity_t *ent = CL_GetEntityByIndex( ClientIndex );
+				if( ent && ent->player && ent != localPlayer )
+				{
+					targetPlayer = ent;
+				}
+				else
+					ClientIndex = 0;
+			}
+			else
+				ClientIndex = 0;
+		}
+
+		// Show info about target player
+		if( targetPlayer && ClientIndex > 0 )
+		{
+			int playerIndex = ClientIndex - 1;
+			float speed_2d;
+			vec3_t distVec;
+			float distance;
+			vec3_t screenPos;
+			int screenX, screenY;
+
+			VectorSubtract( targetPlayer->origin, localPlayer->origin, distVec );
+			distance = VectorLength( distVec );
+
+			// Calculate 2D velocity
+			vec3_t vel_2d;
+			vel_2d[0] = targetPlayer->curstate.velocity[0];
+			vel_2d[1] = targetPlayer->curstate.velocity[1];
+			vel_2d[2] = 0.0f;
+			speed_2d = VectorLength( vel_2d );
+
+			// Try to get screen position for drawing near player
+			if( ref.dllFuncs.WorldToScreen( targetPlayer->origin, screenPos ))
+			{
+				screenX = (int)(screenPos[0] * refState.width);
+				screenY = (int)(screenPos[1] * refState.height);
+			}
+			else
+			{
+				screenX = xpos;
+				screenY = line_height * 18;
+			}
+
+			if( playerIndex >= 0 && playerIndex < MAX_CLIENTS && cl.players[playerIndex].name[0] )
+			{
+				Q_snprintf( msg, sizeof( msg ), "%s", cl.players[playerIndex].name );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Index: %d", targetPlayer->index );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				if( cl.players[playerIndex].model[0] )
+				{
+					Q_snprintf( msg, sizeof( msg ), "Model: %s", cl.players[playerIndex].model );
+					CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+					screenY += line_height;
+				}
+
+				Q_snprintf( msg, sizeof( msg ), "Velocity: %.2f u/s", speed_2d );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Origin: (%.2f, %.2f, %.2f)", 
+					targetPlayer->origin[0], targetPlayer->origin[1], targetPlayer->origin[2] );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Angles: (%.2f, %.2f, %.2f)", 
+					targetPlayer->angles[0], targetPlayer->angles[1], targetPlayer->angles[2] );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Movetype: %d", targetPlayer->curstate.movetype );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Distance: %.2f", distance );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Anim. Frame: %.1f", targetPlayer->curstate.frame );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Anim. Sequence: %d", targetPlayer->curstate.sequence );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Bodygroup Number: %d", targetPlayer->curstate.body );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+				screenY += line_height;
+
+				Q_snprintf( msg, sizeof( msg ), "Skin Number: %d", targetPlayer->curstate.skin );
+				CL_DrawString( screenX, screenY, msg, color, font, FONT_DRAW_HUD );
+			}
+		}
+		else
+		{
+			// Show message in center if no player targeted
+			MakeRGBA( color, 255, 0, 0, 255 );
+			Q_snprintf( msg, sizeof( msg ), "Aim at a player or follow them in 3rd person observer mode to gain information!" );
+			int msgWidth;
+			CL_DrawStringLen( font, msg, &msgWidth, NULL, FONT_DRAW_HUD );
+			int centerX = (refState.width - msgWidth) / 2;
+			int centerY = refState.height / 3;
+			CL_DrawString( centerX, centerY, msg, color, font, FONT_DRAW_HUD );
 		}
 	}
 }
@@ -928,6 +1288,8 @@ void SCR_Init( void )
 	Cvar_RegisterVariable( &cl_showfps );
 	Cvar_RegisterVariable( &cl_showpos );
 	Cvar_RegisterVariable( &cl_showcmd );
+	Cvar_RegisterVariable( &cl_debug );
+	Cvar_RegisterVariable( &thirdperson );
 #ifdef _DEBUG
 	Cvar_RegisterVariable( &cl_showents );
 #endif // NDEBUG

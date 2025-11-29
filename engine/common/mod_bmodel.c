@@ -666,7 +666,11 @@ static void Mod_LoadLump( const byte *in, const mlumpinfo_t *info, mlumpstat_t *
 	if( l->filelen % real_entrysize )
 	{
 		if( !FBitSet( flags, LUMP_SILENT ))
+#if defined(__MINGW32__) || defined(__MINGW64__)
+			Con_DPrintf( S_ERROR "Mod_Load%s: Lump size %d was not a multiple of %lu bytes\n", msg2, l->filelen, (unsigned long)real_entrysize );
+#else
 			Con_DPrintf( S_ERROR "Mod_Load%s: Lump size %d was not a multiple of %zu bytes\n", msg2, l->filelen, real_entrysize );
+#endif
 		loadstat.numerrors++;
 		return;
 	}
@@ -1872,7 +1876,11 @@ static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_
 
 	if( datasize != expected_size )
 	{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_Printf( S_ERROR "%s has mismatched size (%li should be %lu)\n", path, (long)datasize, (unsigned long)expected_size );
+#else
 		Con_Printf( S_ERROR "%s has mismatched size (%li should be %zu)\n", path, (long)datasize, expected_size );
+#endif
 		goto cleanup_and_error;
 	}
 
@@ -3027,7 +3035,11 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
 
 			if(( in->firstedge + in->numedges ) > mod->numsurfedges )
 			{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+				Con_Reportf( S_ERROR "bad surface %i from %lu\n", i, (unsigned long)bmod->numsurfaces );
+#else
 				Con_Reportf( S_ERROR "bad surface %i from %zu\n", i, bmod->numsurfaces );
+#endif
 				continue;
 			}
 
@@ -3450,7 +3462,11 @@ static void Mod_CalcPHS( model_t *mod )
 	t2 = Platform_DoubleTime();
 
 	if( vis_stats )
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_Reportf( "Average leaves visible / audible / total: %lu / %lu / %lu\n", (unsigned long)(vcount / count), (unsigned long)(hcount / count), (unsigned long)count );
+#else
 		Con_Reportf( "Average leaves visible / audible / total: %zu / %zu / %zu\n", vcount / count, hcount / count, count );
+#endif
 	Con_Reportf( "Uncompressed PHS size: %s\n", Q_memprint( rowbytes * count ));
 	Con_Reportf( "Compressed PHS size: %s\n", Q_memprint( total_compressed_size + sizeof( *world.phsofs ) * count ));
 	Con_Reportf( "PHS building time: %.2f ms\n", ( t2 - t1 ) * 1000.0f );
@@ -3548,7 +3564,11 @@ static void Mod_LoadLightVecs( model_t *mod, dbspmodel_t *bmod )
 	if( bmod->deluxdatasize != bmod->lightdatasize )
 	{
 		if( bmod->deluxdatasize > 0 )
+#if defined(__MINGW32__) || defined(__MINGW64__)
+			Con_Printf( S_ERROR "%s: has mismatched size (%lu should be %lu)\n", __func__, (unsigned long)bmod->deluxdatasize, (unsigned long)bmod->lightdatasize );
+#else
 			Con_Printf( S_ERROR "%s: has mismatched size (%zu should be %zu)\n", __func__, bmod->deluxdatasize, bmod->lightdatasize );
+#endif
 		else
 			Mod_LoadLitfile( mod, "dlit", bmod->lightdatasize, &bmod->deluxedata_out, &bmod->deluxdatasize ); // old method
 		return;
@@ -3568,7 +3588,11 @@ static void Mod_LoadShadowmap( model_t *mod, dbspmodel_t *bmod )
 	if( bmod->shadowdatasize != ( bmod->lightdatasize / 3 ))
 	{
 		if( bmod->shadowdatasize > 0 )
+#if defined(__MINGW32__) || defined(__MINGW64__)
+			Con_Printf( S_ERROR "%s: has mismatched size (%lu should be %lu)\n", __func__, (unsigned long)bmod->shadowdatasize, (unsigned long)(bmod->lightdatasize / 3) );
+#else
 			Con_Printf( S_ERROR "%s: has mismatched size (%zu should be %zu)\n", __func__, bmod->shadowdatasize, bmod->lightdatasize / 3 );
+#endif
 		return;
 	}
 
@@ -3674,10 +3698,10 @@ Mod_LoadBmodelLumps
 loading and processing bmodel
 =================
 */
-static qboolean Mod_LoadBmodelLumps( model_t *mod, byte *mod_base, size_t bufferlen, qboolean isworld )
+static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolean isworld )
 {
-	dheader_t *header = (dheader_t *)mod_base;
-	dextrahdr_t	*extrahdr = (dextrahdr_t *)(mod_base + sizeof( dheader_t ));
+	const dheader_t *header = (const dheader_t *)mod_base;
+	const dextrahdr_t	*extrahdr = (const dextrahdr_t *)(mod_base + sizeof( dheader_t ));
 	dbspmodel_t	*bmod = &srcmodel;
 	char		wadvalue[2048];
 	size_t		len = 0;
@@ -3842,10 +3866,10 @@ check for possible errors
 return real entities lump (for bshift swapped lumps)
 =================
 */
-qboolean Mod_TestBmodelLumps( file_t *f, const char *name, byte *mod_base, size_t buffersize, qboolean silent, dlump_t *entities )
+qboolean Mod_TestBmodelLumps( file_t *f, const char *name, const byte *mod_base, qboolean silent, dlump_t *entities )
 {
-	dheader_t	*header = (dheader_t *)mod_base;
-	dextrahdr_t *extrahdr = (dextrahdr_t *)( mod_base + sizeof( dheader_t ));
+	const dheader_t	*header = (const dheader_t *)mod_base;
+	const dextrahdr_t *extrahdr = (const dextrahdr_t *)( mod_base + sizeof( dheader_t ));
 	int	i, flags = LUMP_TESTONLY;
 
 	// always reset the intermediate struct
@@ -3856,13 +3880,10 @@ qboolean Mod_TestBmodelLumps( file_t *f, const char *name, byte *mod_base, size_
 	if( silent )
 		SetBits( flags, LUMP_SILENT );
 
-	if( buffersize < sizeof( *header ))
-		return false;
-
 	switch( header->version )
 	{
 	case HLBSP_VERSION:
-		if( buffersize > sizeof( *header ) + sizeof( *extrahdr ) && extrahdr->id == IDEXTRAHEADER )
+		if( extrahdr->id == IDEXTRAHEADER )
 		{
 			SetBits( flags, LUMP_BSP30EXT );
 		}
@@ -3931,7 +3952,7 @@ qboolean Mod_TestBmodelLumps( file_t *f, const char *name, byte *mod_base, size_
 Mod_LoadBrushModel
 =================
 */
-void Mod_LoadBrushModel( model_t *mod, void *buffer, size_t buffersize, qboolean *loaded )
+void Mod_LoadBrushModel( model_t *mod, const void *buffer, qboolean *loaded )
 {
 	char poolname[MAX_VA_STRING];
 
@@ -3943,7 +3964,7 @@ void Mod_LoadBrushModel( model_t *mod, void *buffer, size_t buffersize, qboolean
 	mod->type = mod_brush;
 
 	// loading all the lumps into heap
-	if( !Mod_LoadBmodelLumps( mod, buffer, buffersize, world.loading ))
+	if( !Mod_LoadBmodelLumps( mod, buffer, world.loading ))
 		return; // there were errors
 
 	if( world.loading ) worldmodel = mod;

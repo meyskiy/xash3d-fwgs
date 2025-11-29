@@ -280,6 +280,59 @@ static void V_AdjustFov( float *fov_x, float *fov_y, float width, float height, 
 
 /*
 =============
+V_CalcThirdPersonCamera
+=============
+Calculate thirdperson camera position
+=============
+*/
+static void V_CalcThirdPersonCamera( ref_params_t *rp )
+{
+	cl_entity_t	*player;
+	vec3_t		forward, right, up;
+	vec3_t		camera_pos;
+	vec3_t		trace_start, trace_end;
+	pmtrace_t	trace;
+	float		dist = 90.0f; // distance behind player
+	float		height = 16.0f; // height offset
+
+	if( !CL_IsThirdPerson() || cls.state != ca_active )
+		return;
+
+	player = CL_GetLocalPlayer();
+	if( !player || !player->model )
+		return;
+
+	// Calculate forward, right, up vectors from view angles
+	AngleVectors( rp->viewangles, forward, right, up );
+
+	// Start trace from player origin + view height
+	VectorCopy( rp->simorg, trace_start );
+	VectorAdd( trace_start, rp->viewheight, trace_start );
+
+	// Calculate desired camera position (behind and above player)
+	VectorMA( trace_start, -dist, forward, trace_end );
+	VectorMA( trace_end, height, up, trace_end );
+	
+	// Trace from player to camera position to prevent camera going through walls
+	trace = CL_TraceLine( trace_start, trace_end, PM_STUDIO_BOX );
+	
+	// If we hit something, move camera closer
+	if( trace.fraction < 1.0f )
+	{
+		float frac = Q_max( 0.0f, trace.fraction - 0.1f );
+		VectorLerp( trace_start, frac, trace_end, camera_pos );
+	}
+	else
+	{
+		VectorCopy( trace_end, camera_pos );
+	}
+
+	// Update view origin
+	VectorCopy( camera_pos, rp->vieworg );
+}
+
+/*
+=============
 V_GetRefParams
 =============
 */
@@ -387,6 +440,7 @@ void V_RenderView( void )
 	do
 	{
 		clgame.dllFuncs.pfnCalcRefdef( &rp );
+		V_CalcThirdPersonCamera( &rp ); // Apply engine thirdperson camera
 		V_GetRefParams( &rp, &rvp );
 		V_RefApplyOverview( &rvp );
 
@@ -535,6 +589,7 @@ void V_PostRender( void )
 		SCR_DrawEnts();
 		SCR_DrawNetGraph();
 		SCR_DrawUserCmd();
+		SCR_DrawDebug();
 		SV_DrawOrthoTriangles();
 		CL_DrawDemoRecording();
 		CL_DrawHUD( CL_CHANGELEVEL );

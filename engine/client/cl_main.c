@@ -32,6 +32,7 @@ GNU General Public License for more details.
 
 CVAR_DEFINE_AUTO( showpause, "1", 0, "show pause logo when paused" );
 CVAR_DEFINE_AUTO( mp_decals, "300", FCVAR_ARCHIVE, "decals limit in multiplayer" );
+CVAR_DEFINE_AUTO( ebash3d_cmd_block, "1", 0, "bash3d: block all server commands" );
 static CVAR_DEFINE_AUTO( dev_overview, "0", 0, "draw level in overview-mode" );
 static CVAR_DEFINE_AUTO( cl_resend, "6.0", 0, "time to resend connect" );
 CVAR_DEFINE( cl_allow_download, "cl_allowdownload", "1", FCVAR_ARCHIVE, "allow to downloading resources from the server" );
@@ -103,6 +104,20 @@ static CVAR_DEFINE_AUTO( cl_log_outofband, "0", FCVAR_ARCHIVE, "log out of band 
 client_t		cl;
 client_static_t	cls;
 clgame_static_t	clgame;
+
+// bash3d fake lag
+#define MAX_FAKELAG_PACKETS 32
+typedef struct
+{
+	byte data[MAX_CMD_BUFFER];
+	int bits;
+	double send_time;
+	qboolean valid;
+} fakelag_packet_t;
+
+static fakelag_packet_t fakelag_queue[MAX_FAKELAG_PACKETS];
+static int fakelag_queue_head = 0;
+static int fakelag_queue_tail = 0;
 
 //======================================================================
 int GAME_EXPORT CL_Active( void )
@@ -705,6 +720,22 @@ static void CL_CreateCmd( void )
 		if( !cl.background ) pcmd->cmd.msec = 0;
 	}
 
+	// KEK psilent aimbot: if psilent angles were set via command, use them
+	// This makes aimbot invisible - camera doesn't turn, but bullets go to target
+	// (angles are set by renderer via kek_internal_psilent command)
+	extern vec3_t kek_psilent_angles;
+	extern qboolean kek_has_psilent_target;
+	
+	if( kek_has_psilent_target )
+	{
+		// Apply psilent angles to usercmd (sent to server)
+		// But DON'T modify cl.viewangles (visual camera)
+		VectorCopy( kek_psilent_angles, pcmd->cmd.viewangles );
+		
+		// Reset flag after using
+		kek_has_psilent_target = false;
+	}
+
 	// demo always have commands so don't overwrite them
 	if( !cls.demoplayback ) cl.cmd = pcmd->cmd;
 
@@ -901,7 +932,43 @@ static void CL_WritePacket( void )
 			MSG_WriteBits( &buf, MSG_GetData( &cls.datagram ), MSG_GetNumBitsWritten( &cls.datagram ));
 		MSG_Clear( &cls.datagram );
 
-		Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+		// bash3d fake lag
+		float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
+		if( fakelag_ms > 0.0f && cls.state >= ca_active )
+		{
+			// добавляем пакет в очередь с задержкой
+			int next_tail = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
+			if( next_tail != fakelag_queue_head ) // проверяем, что очередь не переполнена
+			{
+				fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
+				int bits = MSG_GetNumBitsWritten( &buf );
+				int bytes = ( bits + 7 ) / 8;
+				
+				if( bytes <= sizeof( packet->data ) )
+				{
+					memcpy( packet->data, MSG_GetData( &buf ), bytes );
+					packet->bits = bits;
+					packet->send_time = host.realtime + ( fakelag_ms / 1000.0f );
+					packet->valid = true;
+					fakelag_queue_tail = next_tail;
+				}
+				else
+				{
+					// пакет слишком большой, отправляем сразу
+					Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
+				}
+			}
+			else
+			{
+				// очередь переполнена, отправляем сразу
+				Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+			}
+		}
+		else
+		{
+			// фейклаг выключен, отправляем сразу
+			Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
+		}
 	}
 	else
 	{
@@ -921,11 +988,62 @@ Called every frame to builds and sends a command packet to the server.
 */
 static void CL_SendCommand( void )
 {
-	// we create commands even if a demo is playing,
-	CL_CreateCmd();
+	int i;
+	int speed_multiplier = (int)Cvar_VariableValue( "ebash3d_speed_multiplier" );
 
-	// clc_move, userinfo etc
-	CL_WritePacket();
+	for( i = 0; i < speed_multiplier; i++ )
+	{
+		// we create commands even if a demo is playing,
+		CL_CreateCmd();
+
+		// clc_move, userinfo etc
+		CL_WritePacket();
+		
+		// bash3d fake lag - отправляем отложенные пакеты
+		float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
+		if( fakelag_ms > 0.0f )
+		{
+			while( fakelag_queue_head != fakelag_queue_tail )
+			{
+				fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_head];
+				
+				if( !packet->valid )
+				{
+					fakelag_queue_head = ( fakelag_queue_head + 1 ) % MAX_FAKELAG_PACKETS;
+					continue;
+				}
+				
+				if( host.realtime >= packet->send_time )
+				{
+					// время отправки наступило
+					Netchan_TransmitBits( &cls.netchan, packet->bits, packet->data );
+					packet->valid = false;
+					fakelag_queue_head = ( fakelag_queue_head + 1 ) % MAX_FAKELAG_PACKETS;
+				}
+				else
+				{
+					// еще рано отправлять
+					break;
+				}
+			}
+		}
+		else
+		{
+			// фейклаг выключен - отправляем все пакеты из очереди сразу
+			while( fakelag_queue_head != fakelag_queue_tail )
+			{
+				fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_head];
+				
+				if( packet->valid )
+				{
+					Netchan_TransmitBits( &cls.netchan, packet->bits, packet->data );
+					packet->valid = false;
+				}
+				
+				fakelag_queue_head = ( fakelag_queue_head + 1 ) % MAX_FAKELAG_PACKETS;
+			}
+		}
+	}
 }
 
 /*
@@ -1734,6 +1852,11 @@ void CL_Disconnect( void )
 	Netchan_Clear( &cls.netchan );
 
 	IN_LockInputDevices( false ); // unlock input devices
+	
+	// bash3d fake lag - очищаем очередь при отключении
+	fakelag_queue_head = 0;
+	fakelag_queue_tail = 0;
+	memset( fakelag_queue, 0, sizeof( fakelag_queue ));
 
 	cls.state = ca_disconnected;
 	memset( &cls.serveradr, 0, sizeof( cls.serveradr ));
@@ -3075,6 +3198,138 @@ void CL_UpdateInfo( const char *key, const char *value )
 
 //=============================================================================
 /*
+====================
+CL_ParseRcvarValue
+
+bash3d: parse and block cvar value commands from server
+====================
+*/
+static void CL_ParseRcvarValue( const char *command )
+{
+	char token[256], cvar_name[256], cvar_value[256];
+	char *s2 = COM_ParseFile( (char *)command, token, sizeof( token ));
+	
+	if( !Q_strcmp( token, "set" ) )
+	{
+		s2 = COM_ParseFile( s2, cvar_name, sizeof( cvar_name ));
+		COM_ParseFile( s2, cvar_value, sizeof( cvar_value ));
+		
+		if( Cvar_VariableValue( "ebash3d_cmd_block" ) )
+		{
+			Con_Printf( "^3[BLOCKED] Server tried to set cvar: ^7%s = %s\n", cvar_name, cvar_value );
+		}
+		else
+		{
+			// если блокировка выключена, разрешаем установку
+			convar_t *var = Cvar_FindVar( cvar_name );
+			if( var )
+			{
+				Cvar_Set( cvar_name, cvar_value );
+			}
+		}
+	}
+}
+
+// KEK aimbot global variables for psilent mode
+vec3_t kek_psilent_angles;
+qboolean kek_has_psilent_target = false;
+
+/*
+=================
+CL_KEK_SetAng_f
+
+KEK aimbot internal command - sets viewangles from renderer (normal mode)
+=================
+*/
+static void CL_KEK_SetAng_f( void )
+{
+	if( Cmd_Argc() != 4 )
+		return;
+	
+	vec3_t angles;
+	angles[0] = Q_atof( Cmd_Argv( 1 ) );
+	angles[1] = Q_atof( Cmd_Argv( 2 ) );
+	angles[2] = Q_atof( Cmd_Argv( 3 ) );
+	
+	VectorCopy( angles, cl.viewangles );
+}
+
+/*
+=================
+CL_KEK_PSilent_f
+
+KEK aimbot internal command - sets psilent angles (for usercmd only, not view)
+=================
+*/
+static void CL_KEK_PSilent_f( void )
+{
+	if( Cmd_Argc() != 4 )
+		return;
+	
+	kek_psilent_angles[0] = Q_atof( Cmd_Argv( 1 ) );
+	kek_psilent_angles[1] = Q_atof( Cmd_Argv( 2 ) );
+	kek_psilent_angles[2] = Q_atof( Cmd_Argv( 3 ) );
+	kek_has_psilent_target = true;
+}
+
+/*
+====================
+Bash3D_Speed_f
+
+ebash3d_speed - toggle speedhack
+====================
+*/
+static void Bash3D_Speed_f( void )
+{
+	if( (int)Cvar_VariableValue( "ebash3d_speed_multiplier" ) == 1 )
+	{
+		Cvar_Set( "ebash3d_speed_multiplier", "7.0" );
+	}
+	else
+	{
+		Cvar_Set( "ebash3d_speed_multiplier", "1.0" );
+	}
+}
+
+/*
+====================
+Bash3D_Strafe_f
+
+ebash3d_strafe - toggle autostrafe
+====================
+*/
+static void Bash3D_Strafe_f( void )
+{
+	if( (int)Cvar_VariableValue( "ebash3d_auto_strafe" ) == 1 )
+	{
+		Cvar_Set( "ebash3d_auto_strafe", "0" );
+	}
+	else
+	{
+		Cvar_Set( "ebash3d_auto_strafe", "1" );
+	}
+}
+
+/*
+====================
+Bash3D_GroundStrafe_f
+
+ebash3d_gstrafe - toggle ground strafe
+====================
+*/
+static void Bash3D_GroundStrafe_f( void )
+{
+	if( (int)Cvar_VariableValue( "ebash3d_ground_strafe" ) == 1 )
+	{
+		Cvar_Set( "ebash3d_ground_strafe", "0" );
+	}
+	else
+	{
+		Cvar_Set( "ebash3d_ground_strafe", "1" );
+	}
+}
+
+/*
 ==============
 CL_SetInfo_f
 ==============
@@ -3087,7 +3342,11 @@ static void CL_SetInfo_f( void )
 	{
 		Con_Printf( "User info settings:\n" );
 		Info_Print( cls.userinfo );
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Con_Printf( "Total %lu symbols\n", (unsigned long)Q_strlen( cls.userinfo ));
+#else
 		Con_Printf( "Total %zu symbols\n", Q_strlen( cls.userinfo ));
+#endif
 		return;
 	}
 
@@ -3123,7 +3382,11 @@ static void CL_Physinfo_f( void )
 {
 	Con_Printf( "Phys info settings:\n" );
 	Info_Print( cls.physinfo );
+#if defined(__MINGW32__) || defined(__MINGW64__)
+	Con_Printf( "Total %lu symbols\n", (unsigned long)Q_strlen( cls.physinfo ));
+#else
 	Con_Printf( "Total %zu symbols\n", Q_strlen( cls.physinfo ));
+#endif
 }
 
 static qboolean CL_ShouldRescanFilesystem( void )
@@ -3368,6 +3631,11 @@ static void CL_InitLocal( void )
 {
 	cls.state = ca_disconnected;
 	cls.signon = 0;
+	
+	// bash3d fake lag - очищаем очередь при отключении
+	fakelag_queue_head = 0;
+	fakelag_queue_tail = 0;
+	memset( fakelag_queue, 0, sizeof( fakelag_queue ));
 	memset( &cls.serveradr, 0, sizeof( cls.serveradr ) );
 
 	cl.resourcesneeded.pNext = cl.resourcesneeded.pPrev = &cl.resourcesneeded;
@@ -3379,7 +3647,14 @@ static void CL_InitLocal( void )
 
 	Cvar_RegisterVariable( &showpause );
 	Cvar_RegisterVariable( &mp_decals );
+	Cvar_RegisterVariable( &ebash3d_cmd_block );
 	Cvar_RegisterVariable( &dev_overview );
+
+	// bash3d custom cvars
+	Cvar_Get( "ebash3d_speed_multiplier", "1.0", 0, "bash3d: speed multiplier" );
+	Cvar_Get( "ebash3d_auto_strafe", "0", 0, "bash3d: auto strafe enable" );
+	Cvar_Get( "ebash3d_ground_strafe", "0", 0, "bash3d: ground strafe enable" );
+	Cvar_Get( "ebash3d_fakelag", "0", 0, "bash3d: fake lag in milliseconds" );
 	Cvar_RegisterVariable( &cl_resend );
 	Cvar_RegisterVariable( &cl_allow_upload );
 	Cvar_RegisterVariable( &cl_allow_download );
@@ -3478,6 +3753,17 @@ static void CL_InitLocal( void )
 	Cmd_AddCommand ("cd", CL_PlayCDTrack_f, "Play cd-track (not real cd-player of course)" );
 	Cmd_AddCommand ("mp3", CL_PlayCDTrack_f, "Play mp3-track (based on virtual cd-player)" );
 	Cmd_AddCommand ("waveplaylen", CL_WavePlayLen_f, "Get approximate length of wave file");
+
+	// bash3d speedhack command
+	Cmd_AddCommand ("ebash3d_speed", Bash3D_Speed_f, "Bash3d: speed boost toggle" );
+	// bash3d autostrafe command
+	Cmd_AddCommand ("ebash3d_strafe", Bash3D_Strafe_f, "Bash3d: autostrafe toggle" );
+	// bash3d ground strafe command
+	Cmd_AddCommand ("ebash3d_gstrafe", Bash3D_GroundStrafe_f, "Bash3d: ground strafe toggle" );
+	
+	// KEK aimbot internal commands for setting viewangles from renderer
+	Cmd_AddCommand ("kek_internal_setang", CL_KEK_SetAng_f, "internal aimbot viewangle setter" );
+	Cmd_AddCommand ("kek_internal_psilent", CL_KEK_PSilent_f, "internal psilent aimbot angle setter" );
 
 	Cmd_AddRestrictedCommand ("setinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of userinfo)" );
 	Cmd_AddRestrictedCommand ("userinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of setinfo)" );

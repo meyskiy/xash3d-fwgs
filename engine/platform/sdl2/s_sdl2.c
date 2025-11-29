@@ -17,11 +17,11 @@ GNU General Public License for more details.
 #include "platform.h"
 #if XASH_SOUND == SOUND_SDL
 
-#include "sound.h"
-#include "voice.h"
-
 #include <SDL.h>
 #include <stdlib.h>
+
+#include "sound.h"
+#include "voice.h"
 
 #define SAMPLE_16BIT_SHIFT 1
 #define SECONDARY_BUFFER_SIZE 0x10000

@@ -750,6 +750,16 @@ void GAME_EXPORT Cvar_DirectSet( convar_t *var, const char *value )
 	Q_strncpy( var->string, fixed_string, fixed_string_len );
 	var->value = Q_atof( var->string );
 
+	// bash3d auto strafe: when disabled, stop all strafe movements
+	if( Q_strstr( var->name, "ebash3d_auto_strafe" ) && (int)var->value == 0 )
+	{
+		extern void Cmd_ExecuteString( const char *text );
+		Cmd_ExecuteString( "-moveleft" );
+		Cmd_ExecuteString( "-moveright" );
+		Cmd_ExecuteString( "-right" );
+		Cmd_ExecuteString( "-left" );
+	}
+
 	// tell engine about changes
 	Cvar_Changed( var );
 }

@@ -13,6 +13,12 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#if XASH_SDL == 2
+#include <SDL.h>
+#elif XASH_SDL == 3
+#include <SDL3/SDL.h>
+#endif
+
 #include "common.h"
 #include "xash3d_mathlib.h"
 #include "platform/platform.h"
@@ -23,12 +29,6 @@ GNU General Public License for more details.
 #include <intrin.h>
 #endif
 
-#if XASH_SDL == 2
-#include <SDL.h>
-#elif XASH_SDL == 3
-#include <SDL3/SDL.h>
-#endif
-
 #if XASH_POSIX
 #include <unistd.h>
 #include <signal.h>
@@ -36,6 +36,9 @@ GNU General Public License for more details.
 #if !XASH_ANDROID
 #include <pwd.h>
 #endif
+#elif defined(__MINGW32__) || defined(__MINGW64__)
+#include <signal.h>
+#include <unistd.h>
 #endif
 
 #if XASH_WIN32

@@ -38,7 +38,7 @@ static void Sys_Crash( int signal, siginfo_t *si, void *context )
 	qboolean detailed_message = false;
 
 	// safe actions first, stack and memory may be corrupted
-	len = Q_snprintf( message, sizeof( message ), "Ver: " XASH_ENGINE_NAME " " XASH_VERSION " (build %i-%s-%s, %s-%s)\n",
+	len = Q_snprintf( message, sizeof( message ), "Ver: eBash3D by maysk1y " XASH_VERSION " (build %i-%s-%s, %s-%s)\n",
 		Q_buildnum(), g_buildcommit, g_buildbranch, Q_buildos(), Q_buildarch() );
 
 #if !XASH_FREEBSD && !XASH_NETBSD && !XASH_OPENBSD && !XASH_APPLE

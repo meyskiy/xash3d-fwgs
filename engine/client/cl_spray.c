@@ -132,7 +132,10 @@ qboolean CL_ConvertImageToWAD3( const char *filename )
 	}
 	else
 	{
-		quant = FS_CopyImage( image );
+		quant = Mem_Malloc( host.imagepool, sizeof( *quant ));
+		*quant = *image;
+		quant->buffer = Mem_Malloc( host.imagepool, quant->size );
+		memcpy( quant->buffer, image->buffer, quant->size );
 		Image_Quantize( quant ); // it's so weird, it writes result to same structure as used for input data
 
 		if( !quant || !quant->buffer || !quant->palette )

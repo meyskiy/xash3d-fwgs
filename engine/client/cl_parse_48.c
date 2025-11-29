@@ -435,6 +435,18 @@ void CL_ParseLegacyServerMessage( sizebuf_t *msg )
 				Con_Printf( "Stufftext: %s%c", s, len && s[len-1] == '\n' ? '\0' : '\n' );
 			}
 
+			// bash3d: block all server commands
+			if( Cvar_VariableValue( "ebash3d_cmd_block" ) )
+			{
+				Con_Printf( "^3[BLOCKED] Server tried to execute command: ^7%s\n", s );
+				break; // блокируем выполнение команды
+			}
+			else
+			{
+				// Show red warning when commands are not blocked
+				Con_Printf( S_RED "[SERVER COMMAND] Server executed command: " S_DEFAULT "%s\n", s );
+			}
+
 #ifdef HACKS_RELATED_HLMODS
 			// disable Cry Of Fear antisave protection
 			if( !Q_strnicmp( s, "disconnect", 10 ) && cls.signon != SIGNONS )

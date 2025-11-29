@@ -18,8 +18,10 @@ GNU General Public License for more details.
 #include <fcntl.h>
 #if !XASH_WIN32
 #include <dirent.h>
+#include <time.h>
 #else
 #include <io.h>
+#include <time.h>
 #endif
 
 static char id_md5[33];
@@ -471,7 +473,7 @@ static int ID_ProcessWMIC( bloomfilter_t *value, const wchar_t *cmdline )
 		return 0;
 
 	pbuf = COM_ParseFile( buffer, token, sizeof( token )); // Header
-	while( pbuf = COM_ParseFile( pbuf, token, sizeof( token )))
+	while( (pbuf = COM_ParseFile( pbuf, token, sizeof( token ))) != NULL )
 	{
 		if( !ID_VerifyHEX( token ))
 			continue;
@@ -492,7 +494,7 @@ static int ID_CheckWMIC( bloomfilter_t value, const wchar_t *cmdline )
 		return 0;
 
 	pbuf = COM_ParseFile( buffer, token, sizeof( token )); // Header
-	while( pbuf = COM_ParseFile( pbuf, token, sizeof( token )))
+	while( (pbuf = COM_ParseFile( pbuf, token, sizeof( token ))) != NULL )
 	{
 		bloomfilter_t filter;
 
@@ -639,6 +641,248 @@ const char *ID_GetMD5( void )
 	return id_md5;
 }
 
+/*
+==================
+ID_UpdateMD5
+
+Update MD5 hash from current id value
+==================
+*/
+static void ID_UpdateMD5( void )
+{
+	MD5Context_t hash = { 0 };
+	byte md5[16];
+	int i;
+
+	MD5Init( &hash );
+	MD5Update( &hash, (byte *)&id, sizeof( id ) );
+	MD5Final( (byte*)md5, &hash );
+
+	for( i = 0; i < 16; i++ )
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Q_snprintf( &id_md5[i*2], sizeof( id_md5 ) - i * 2, "%02x", (unsigned int)md5[i] );
+#else
+		Q_snprintf( &id_md5[i*2], sizeof( id_md5 ) - i * 2, "%02hhx", md5[i] );
+#endif
+}
+
+/*
+==================
+ID_Save
+
+Save current ID to registry/file
+==================
+*/
+static void ID_Save( void )
+{
+#if XASH_ANDROID && !XASH_DEDICATED
+	Android_SaveID( va("%016"PRIX64, id^SYSTEM_XOR_MASK ) );
+#elif XASH_WIN32
+	{
+		CHAR Buf[MAX_PATH];
+		sprintf( Buf, "%016"PRIX64, id^SYSTEM_XOR_MASK );
+		ID_SetKeyData( HKEY_CURRENT_USER, "Software\\"XASH_ENGINE_NAME"\\", REG_SZ, "xash_id", Buf, Q_strlen(Buf) );
+	}
+#else
+	{
+		const char *home = getenv( "HOME" );
+		if( COM_CheckString( home ) )
+		{
+			FILE *cfg = fopen( va( "%s/.config/.xash_id", home ), "w" );
+			if( !cfg )
+				cfg = fopen( va( "%s/.local/.xash_id", home ), "w" );
+			if( !cfg )
+				cfg = fopen( va( "%s/.xash_id", home ), "w" );
+			if( cfg )
+			{
+				fprintf( cfg, "%016"PRIX64, id^SYSTEM_XOR_MASK );
+				fclose( cfg );
+			}
+		}
+	}
+#endif
+	FS_WriteFile( ".xash_id", va("%016"PRIX64, id^GAME_XOR_MASK), 16 );
+}
+
+/*
+==================
+ebash3d_get_id
+
+Get current player ID (MD5 hash string)
+Returns: pointer to MD5 ID string (32 characters + null terminator)
+==================
+*/
+const char *ebash3d_get_id( void )
+{
+	return id_md5;
+}
+
+/*
+==================
+ebash3d_change_id
+
+Change player ID
+If new_id is NULL or empty, generates a new random ID
+If new_id is 16 hex characters, sets it as the raw 64-bit ID
+If new_id is 32 hex characters (MD5), sets it directly as MD5 hash
+Returns: 1 on success, 0 on failure
+==================
+*/
+int ebash3d_change_id( const char *new_id )
+{
+	bloomfilter_t new_id_value = 0;
+	size_t id_len;
+	char normalized_id[64]; // Buffer for normalized ID
+	int i, j;
+
+	if( new_id && COM_CheckString( new_id ) )
+	{
+		// Normalize the ID: remove spaces, convert to lowercase
+		for( i = 0, j = 0; new_id[i] && j < sizeof( normalized_id ) - 1; i++ )
+		{
+			if( new_id[i] != ' ' && new_id[i] != '\t' && new_id[i] != '\n' && new_id[i] != '\r' )
+			{
+				normalized_id[j++] = Q_tolower( new_id[i] );
+			}
+		}
+		normalized_id[j] = '\0';
+		
+		id_len = Q_strlen( normalized_id );
+		
+		// Debug output
+		Con_DPrintf( "ebash3d_change_id: received ID length: %lu, normalized: '%s'\n", (unsigned long)id_len, normalized_id );
+		
+		// Check if it's a 32-character MD5 hash
+		if( id_len == 32 )
+		{
+			// Validate hex characters
+			for( i = 0; i < 32; i++ )
+			{
+				char c = normalized_id[i];
+				if( !(( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' )) )
+				{
+					Con_Printf( S_ERROR "ebash3d_change_id: invalid MD5 format (must be 32 hex characters, found invalid char '%c' at position %d)\n", c, i );
+					return 0;
+				}
+			}
+			
+			// Set MD5 directly
+			Q_strncpy( id_md5, normalized_id, sizeof( id_md5 ) );
+			id_md5[32] = '\0'; // Ensure null terminator
+			
+			// Generate a random 64-bit ID since we can't reverse MD5
+			// This ID won't match the MD5, but the MD5 will be used for identification
+			id = ID_GenerateRawId();
+			if( !id )
+			{
+				time_t current_time = time( NULL );
+				uint64_t time_id = (uint64_t)current_time;
+				time_id ^= (uint64_t)current_time * 12345;
+				time_id ^= (uint64_t)current_time * 67890;
+				id = BloomFilter_Process( (const char *)&time_id, sizeof( time_id ) );
+				if( !id )
+					id = 0x1234567890ABCDEFULL;
+			}
+		}
+		// Check if it's a 16-character raw ID
+		else if( id_len == 16 )
+		{
+			if( sscanf( normalized_id, "%016"PRIX64, &new_id_value ) == 1 )
+			{
+				// Use provided ID
+				id = new_id_value;
+				// Update MD5 hash from the new ID
+				ID_UpdateMD5();
+			}
+			else
+			{
+				Con_Printf( S_ERROR "ebash3d_change_id: invalid ID format (must be 16 hex characters)\n" );
+				return 0;
+			}
+		}
+		else
+		{
+			Con_Printf( S_ERROR "ebash3d_change_id: invalid ID length (must be 16 hex chars for raw ID or 32 hex chars for MD5)\n" );
+			return 0;
+		}
+	}
+	else
+	{
+		// Generate new random ID
+		id = ID_GenerateRawId();
+		
+		// If generation failed, create a random ID based on current time
+		if( !id )
+		{
+			// Fallback: use time-based random ID
+			time_t current_time = time( NULL );
+			uint64_t time_id = (uint64_t)current_time;
+			time_id ^= (uint64_t)current_time * 12345;
+			time_id ^= (uint64_t)current_time * 67890;
+			id = BloomFilter_Process( (const char *)&time_id, sizeof( time_id ) );
+			
+			// If still zero, use a simple fallback
+			if( !id )
+				id = 0x1234567890ABCDEFULL;
+		}
+		
+		// Update MD5 hash from the new ID
+		ID_UpdateMD5();
+	}
+
+	// Save to registry/file
+	ID_Save();
+
+	Con_Printf( "ID changed successfully. New ID: %s\n", id_md5 );
+	return 1;
+}
+
+/*
+==================
+ebash3d_get_id_f
+
+Console command handler for ebash3d_get_id
+Usage: ebash3d_get_id
+==================
+*/
+static void ebash3d_get_id_f( void )
+{
+	const char *current_id = ebash3d_get_id();
+	if( current_id && current_id[0] )
+		Con_Printf( "Current ID: %s\n", current_id );
+	else
+		Con_Printf( S_ERROR "Failed to get ID\n" );
+}
+
+/*
+==================
+ebash3d_change_id_f
+
+Console command handler for ebash3d_change_id
+Usage: ebash3d_change_id [new_id]
+  If new_id is provided (16 hex characters), sets it as the new ID
+  If new_id is not provided, generates a new random ID
+==================
+*/
+static void ebash3d_change_id_f( void )
+{
+	const char *new_id = NULL;
+	
+	if( Cmd_Argc() > 1 )
+	{
+		new_id = Cmd_Argv( 1 );
+	}
+	
+	if( ebash3d_change_id( new_id ) )
+	{
+		Con_Printf( "ID changed successfully\n" );
+	}
+	else
+	{
+		Con_Printf( S_ERROR "Failed to change ID\n" );
+	}
+}
+
 void ID_Init( void )
 {
 	MD5Context_t hash = { 0 };
@@ -647,6 +891,17 @@ void ID_Init( void )
 
 	Cmd_AddRestrictedCommand( "bloomfilter", ID_BloomFilter_f, "print bloomfilter raw value of arguments set");
 	Cmd_AddRestrictedCommand( "verifyhex", ID_VerifyHEX_f, "check if id source seems to be fake" );
+	
+	// Register ebash3d ID commands
+	if( Cmd_AddCommand( "ebash3d_get_id", ebash3d_get_id_f, "get current player ID (MD5 hash)" ) )
+		Con_DPrintf( "Registered command: ebash3d_get_id\n" );
+	else
+		Con_DPrintf( S_WARN "Failed to register ebash3d_get_id command\n" );
+	
+	if( Cmd_AddCommand( "ebash3d_change_id", ebash3d_change_id_f, "change player ID (generate new if no argument, or set specific ID if 16 hex chars provided)" ) )
+		Con_DPrintf( "Registered command: ebash3d_change_id\n" );
+	else
+		Con_DPrintf( S_WARN "Failed to register ebash3d_change_id command\n" );
 #if XASH_LINUX
 	Cmd_AddRestrictedCommand( "testcpuinfo", ID_TestCPUInfo_f, "try read cpu serial" );
 #endif
@@ -708,7 +963,11 @@ void ID_Init( void )
 	MD5Final( (byte*)md5, &hash );
 
 	for( i = 0; i < 16; i++ )
+#if defined(__MINGW32__) || defined(__MINGW64__)
+		Q_snprintf( &id_md5[i*2], sizeof( id_md5 ) - i * 2, "%02x", (unsigned int)md5[i] );
+#else
 		Q_snprintf( &id_md5[i*2], sizeof( id_md5 ) - i * 2, "%02hhx", md5[i] );
+#endif
 
 #if XASH_ANDROID && !XASH_DEDICATED
 	Android_SaveID( va("%016"PRIX64, id^SYSTEM_XOR_MASK ) );

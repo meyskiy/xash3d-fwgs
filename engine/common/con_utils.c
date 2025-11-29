@@ -55,6 +55,7 @@ Cmd_ListMaps
 */
 int Cmd_ListMaps( search_t *t, char *lastmapname, size_t len )
 {
+	byte   buf[MAX_SYSPATH]; // 1 kb
 	file_t *f;
 	int i, nummaps;
 	string mapname, message, compiler, generator;
@@ -77,26 +78,24 @@ int Cmd_ListMaps( search_t *t, char *lastmapname, size_t len )
 
 		if( f )
 		{
-			dheader_t   *header;
-			dextrahdr_t *hdrext;
-			dlump_t     entities;
-			fs_offset_t filelen;
-			byte        buf[MAX_SYSPATH] = { 0 }; // 1 kb
+			dheader_t *header;
+			dextrahdr_t	*hdrext;
+			dlump_t entities;
 
-			filelen = FS_Read( f, buf, sizeof( buf ));
+			memset( buf, 0, sizeof( buf ));
+			FS_Read( f, buf, sizeof( buf ));
+			header = (dheader_t *)buf;
+			ver = header->version;
 
 			// check all the lumps and some other errors
-			if( Mod_TestBmodelLumps( f, t->filenames[i], buf, filelen, true, &entities ))
+			if( Mod_TestBmodelLumps( f, t->filenames[i], buf, true, &entities ))
 			{
 				lumpofs = entities.fileofs;
 				lumplen = entities.filelen;
 				ver = header->version;
 			}
 
-			header = (dheader_t *)buf;
 			hdrext = (dextrahdr_t *)((byte *)buf + sizeof( dheader_t ));
-
-			ver = header->version;
 			if( hdrext->id == IDEXTRAHEADER ) version = hdrext->version;
 
 			Q_strncpy( entfilename, t->filenames[i], sizeof( entfilename ));
@@ -587,7 +586,11 @@ static qboolean Cmd_GetKeysList( const char *s, char *completedname, int length 
 		Con_Printf( "%16s\n", matchbuf );
 	}
 
+#if defined(__MINGW32__) || defined(__MINGW64__)
+	Con_Printf( "\n^3 %lu keys found.\n", (unsigned long)numkeys );
+#else
 	Con_Printf( "\n^3 %zu keys found.\n", numkeys );
+#endif
 
 	if( completedname && length )
 	{
@@ -893,6 +896,7 @@ static qboolean Cmd_GetCDList( const char *s, char *completedname, int length )
 static qboolean Cmd_CheckMapsList_R( qboolean fRefresh, qboolean onlyingamedir )
 {
 	qboolean	use_filter = false;
+	byte	buf[MAX_SYSPATH];
 	string	mpfilter;
 	char	*buffer;
 	size_t	buffersize;
@@ -939,15 +943,14 @@ static qboolean Cmd_CheckMapsList_R( qboolean fRefresh, qboolean onlyingamedir )
 
 		if( f )
 		{
-			qboolean    have_spawnpoints = false;
-			dlump_t     entities;
-			fs_offset_t filelen;
-			byte        buf[MAX_SYSPATH] = { 0 };
+			qboolean  have_spawnpoints = false;
+			dlump_t   entities;
 
-			filelen = FS_Read( f, buf, MAX_SYSPATH );
+			memset( buf, 0, MAX_SYSPATH );
+			FS_Read( f, buf, MAX_SYSPATH );
 
 			// check all the lumps and some other errors
-			if( !Mod_TestBmodelLumps( f, t->filenames[i], buf, filelen, true, &entities ))
+			if( !Mod_TestBmodelLumps( f, t->filenames[i], buf, true, &entities ))
 			{
 				FS_Close( f );
 				continue;
