@@ -3,7 +3,11 @@
 // On Android NDK, we need to ensure we use the new libc++ and not the old STL
 #if __ANDROID__
 // Prevent inclusion of old STL headers that conflict with new libc++
+// Define this before including any headers to prevent old STL from being included
 #define _LIBCPP_VERSION 1
+// Prevent the old STL utility header from being included
+#define _STL_PAIR_H
+#define _STL_UTILITY_H
 #endif
 #include <vector>
 
