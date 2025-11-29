@@ -35,4 +35,3 @@ private:
 
     std::vector<IImGuiWindow*> m_WindowList;
 };
-

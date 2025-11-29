@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 
-// Include engine headers after imgui to avoid conflicts
+// Include engine headers after imgui to avoid conflictss
 // const.h must be included first to define basic types (uint, word, byte, BIT, color24, colorVec, etc.)
 // cvardef.h must be included before ref_api.h to define cvar_t
 // vid_common.h must be included before common.h to define window_mode_e before platform.h uses it
