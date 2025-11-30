@@ -1,4 +1,12 @@
 #pragma once
+
+#if __ANDROID__
+// Prevent old STL from being included by defining its guards BEFORE any includes
+#define _STL_PAIR_H
+#define _STL_UTILITY_H
+#define _STL_CONFIG_H
+#endif
+
 #include "imgui_window_system.h"
 #include "cursor_type.h"
 #include <map>
