@@ -70,6 +70,10 @@
 #define GL_SILENCE_DEPRECATION
 #include <OpenGL/gl.h>
 #elif defined(__ANDROID__)
+// On Android, we need to include const.h first to define byte and word types
+extern "C" {
+#include "const.h"
+}
 #include "gl_export.h"
 // On Android, OpenGL functions are loaded dynamically, so we need to use function pointers with 'p' prefix
 // Create macros to map standard OpenGL function names to Android function pointers
@@ -101,12 +105,27 @@
 #define glTexParameteri pglTexParameteri
 #define glTexImage2D pglTexImage2D
 #define glTexSubImage2D pglTexSubImage2D
-// GL_LIGHTING and GL_COLOR_MATERIAL may not be available on OpenGL ES, so we'll conditionally disable them
+#define glPixelStorei pglPixelStorei
+#define glGenTextures pglGenTextures
+#define glDeleteTextures pglDeleteTextures
+// GL constants that may not be available on OpenGL ES
 #ifndef GL_LIGHTING
 #define GL_LIGHTING 0x0B50
 #endif
 #ifndef GL_COLOR_MATERIAL
 #define GL_COLOR_MATERIAL 0x0B57
+#endif
+#ifndef GL_POLYGON_MODE
+#define GL_POLYGON_MODE 0x0B40
+#endif
+#ifndef GL_VIEWPORT
+#define GL_VIEWPORT 0x0BA2
+#endif
+#ifndef GL_SHADE_MODEL
+#define GL_SHADE_MODEL 0x0B54
+#endif
+#ifndef GL_UNPACK_ROW_LENGTH
+#define GL_UNPACK_ROW_LENGTH 0x0CF2
 #endif
 #else
 #include <GL/gl.h>

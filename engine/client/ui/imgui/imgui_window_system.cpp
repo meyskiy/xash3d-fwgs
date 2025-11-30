@@ -1,8 +1,16 @@
-// Include C++ standard library headers FIRST, before any engine headers
+// Include imgui headers FIRST to establish namespace before STL
+#include "imgui.h"
+
+// Include C++ standard library headers after imgui to avoid STL conflicts on Android
+#if __ANDROID__
+// Prevent old STL from being included by defining its guards
+#define _STL_PAIR_H
+#define _STL_UTILITY_H
+#define _STL_CONFIG_H
+#endif
 #include <vector>
 
-// Include imgui headers
-#include "imgui.h"
+// Continue with other headers
 #include "imgui_window_system.h"
 #include "keydefs.h"
 
