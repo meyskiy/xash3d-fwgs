@@ -21,7 +21,6 @@ GNU General Public License for more details.
 #include "sound.h"
 #include "input.h" // touch
 #include "platform/platform.h" // GL_UpdateSwapInterval
-#include "ui/imgui/imgui_integration.h"
 
 /*
 ===============
@@ -602,9 +601,6 @@ void V_PostRender( void )
 		Con_DrawDebug(); // must be last
 		Touch_Draw();
 		OSK_Draw();
-		
-		// ImGui rendering
-		ImGui_NewFrame();
 
 		S_ExtraUpdate();
 	}

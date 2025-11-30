@@ -19,7 +19,6 @@ GNU General Public License for more details.
 #include "qfont.h"
 #include "input.h"
 #include "library.h"
-#include "ui/imgui/imgui_integration.h"
 
 CVAR_DEFINE_AUTO( scr_centertime, "2.5", 0, "centerprint hold time" );
 CVAR_DEFINE_AUTO( scr_loading, "0", 0, "loading bar progress" );
@@ -1265,9 +1264,6 @@ void SCR_VidInit( void )
 	// restart console size
 	Con_VidInit ();
 	Touch_NotifyResize();
-	
-	// ImGui vid init
-	ImGui_VidInit();
 }
 
 /*

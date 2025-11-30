@@ -15,7 +15,6 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
-#include "ui/imgui/imgui_integration.h"
 #include "net_encode.h"
 #include "cl_tent.h"
 #include "input.h"
@@ -34,8 +33,6 @@ GNU General Public License for more details.
 CVAR_DEFINE_AUTO( showpause, "1", 0, "show pause logo when paused" );
 CVAR_DEFINE_AUTO( mp_decals, "300", FCVAR_ARCHIVE, "decals limit in multiplayer" );
 CVAR_DEFINE_AUTO( ebash3d_cmd_block, "1", 0, "bash3d: block all server commands" );
-CVAR_DEFINE_AUTO( kek_fakelag, "0", FCVAR_ARCHIVE, "enable fakelag (0=off, 1=on, makes player teleport/lag to make aiming harder)" );
-CVAR_DEFINE_AUTO( kek_fakelag_delay, "150", FCVAR_ARCHIVE, "fakelag delay in milliseconds (higher = more lag for other players, default 150ms)" );
 static CVAR_DEFINE_AUTO( dev_overview, "0", 0, "draw level in overview-mode" );
 static CVAR_DEFINE_AUTO( cl_resend, "6.0", 0, "time to resend connect" );
 CVAR_DEFINE( cl_allow_download, "cl_allowdownload", "1", FCVAR_ARCHIVE, "allow to downloading resources from the server" );
@@ -108,8 +105,8 @@ client_t		cl;
 client_static_t	cls;
 clgame_static_t	clgame;
 
-// bash3d fake lag и KEK fakelag
-#define MAX_FAKELAG_PACKETS 64  // увеличен размер для поддержки больших задержек (300ms при 60fps = ~18 пакетов)
+// bash3d fake lag
+#define MAX_FAKELAG_PACKETS 32
 typedef struct
 {
 	byte data[MAX_CMD_BUFFER];
@@ -121,11 +118,6 @@ typedef struct
 static fakelag_packet_t fakelag_queue[MAX_FAKELAG_PACKETS];
 static int fakelag_queue_head = 0;
 static int fakelag_queue_tail = 0;
-
-// KEK fakelag - задержка отправки пакетов на сервер для создания эффекта лага
-// Локально движение нормальное (предсказание работает), но на сервер отправка задерживается
-// Используем очередь для задержки пакетов
-static int kek_fakelag_packet_count = 0;
 
 //======================================================================
 int GAME_EXPORT CL_Active( void )
@@ -895,26 +887,9 @@ static void CL_WritePacket( void )
 	// can send this command?
 	pcmd = &cl.commands[cls.netchan.outgoing_sequence & CL_UPDATE_MASK];
 
-	// KEK fakelag - проверяем, включен ли fakelag
-	float kek_fakelag_value = Cvar_VariableValue( "kek_fakelag" );
-	qboolean use_kek_fakelag = ( kek_fakelag_value > 0.0f && !cls.demoplayback && cls.state >= ca_active );
-	
-	// KEK fakelag НЕ использует heldback, чтобы локальное движение было нормальным
-	// Вместо этого мы задерживаем отправку пакетов в конце CL_WritePacket
-	// Локально команды обрабатываются нормально через CL_PredictMovement
-	// ВАЖНО: при включенном fakelag всегда устанавливаем heldback = false, чтобы пакет создавался
-	if( use_kek_fakelag )
-	{
-		// При fakelag всегда создаем пакет (heldback = false), но отправка будет задержана через очередь
+	if( cl.maxclients == 1 || ( NET_IsLocalAddress( cls.netchan.remote_address ) && !host_limitlocal.value ) || ( host.realtime >= cls.nextcmdtime && Netchan_CanPacket( &cls.netchan, true )))
 		pcmd->heldback = false;
-	}
-	else
-	{
-		// Обычная логика отправки команд
-		if( cl.maxclients == 1 || ( NET_IsLocalAddress( cls.netchan.remote_address ) && !host_limitlocal.value ) || ( host.realtime >= cls.nextcmdtime && Netchan_CanPacket( &cls.netchan, true )))
-			pcmd->heldback = false;
-		else pcmd->heldback = true;
-	}
+	else pcmd->heldback = true;
 
 	// immediately add it to the demo, regardless if we send the message or not
 	if( cls.demorecording )
@@ -1004,133 +979,42 @@ static void CL_WritePacket( void )
 			MSG_WriteBits( &buf, MSG_GetData( &cls.datagram ), MSG_GetNumBitsWritten( &cls.datagram ));
 		MSG_Clear( &cls.datagram );
 
-		// KEK fakelag - задерживаем отправку пакетов на сервер для создания эффекта лага
-		// Локально движение нормальное (предсказание работает), но на сервер отправка задерживается
-		float kek_fakelag_value = Cvar_VariableValue( "kek_fakelag" );
-		if( kek_fakelag_value > 0.0f && cls.state >= ca_active )
+		// bash3d fake lag
+		float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
+		if( fakelag_ms > 0.0f && cls.state >= ca_active )
 		{
-			// Получаем задержку из квара (в миллисекундах)
-			float fakelag_delay_ms = Cvar_VariableValue( "kek_fakelag_delay" );
-			// Ограничиваем задержку разумными пределами (0-500ms)
-			fakelag_delay_ms = bound( 0.0f, fakelag_delay_ms, 500.0f );
-			
-			// Если задержка 0, отправляем пакет сразу
-			if( fakelag_delay_ms <= 0.0f )
+			// добавляем пакет в очередь с задержкой
+			int next_tail = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
+			if( next_tail != fakelag_queue_head ) // проверяем, что очередь не переполнена
 			{
-				Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
-			}
-			else
-			{
-				// Добавляем пакет в очередь с задержкой (используем ту же очередь что и bash3d)
-				int next_tail = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
-				if( next_tail != fakelag_queue_head ) // проверяем, что очередь не переполнена
+				fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
+				int bits = MSG_GetNumBitsWritten( &buf );
+				int bytes = ( bits + 7 ) / 8;
+				
+				if( bytes <= sizeof( packet->data ) )
 				{
-					fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
-					int bits = MSG_GetNumBitsWritten( &buf );
-					int bytes = ( bits + 7 ) / 8;
-					
-					if( bytes <= sizeof( packet->data ) )
-					{
-						memcpy( packet->data, MSG_GetData( &buf ), bytes );
-						packet->bits = bits;
-						// Задержка в миллисекундах - создаст заметный лаг для других игроков
-						packet->send_time = host.realtime + ( fakelag_delay_ms / 1000.0f );
-						packet->valid = true;
-						fakelag_queue_tail = next_tail;
-						// ВАЖНО: outgoing_sequence уже увеличен выше, пакет будет отправлен позже из очереди
-						// Локальное предсказание работает нормально, так как CL_PredictMovement вызывается в CL_CreateCmd
-						// НЕ блокируем движение - пакет просто задерживается в очереди
-					}
-					else
-					{
-						// пакет слишком большой, отправляем сразу
-						Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
-					}
+					memcpy( packet->data, MSG_GetData( &buf ), bytes );
+					packet->bits = bits;
+					packet->send_time = host.realtime + ( fakelag_ms / 1000.0f );
+					packet->valid = true;
+					fakelag_queue_tail = next_tail;
 				}
 				else
 				{
-					// очередь переполнена - отправляем самый старый пакет из очереди, чтобы освободить место
-					// Это предотвращает отправку всех пакетов сразу при переполнении
-					if( fakelag_queue_head != fakelag_queue_tail )
-					{
-						fakelag_packet_t *old_packet = &fakelag_queue[fakelag_queue_head];
-						if( old_packet->valid )
-						{
-							// Отправляем самый старый пакет, даже если время еще не наступило
-							Netchan_TransmitBits( &cls.netchan, old_packet->bits, old_packet->data );
-							old_packet->valid = false;
-							fakelag_queue_head = ( fakelag_queue_head + 1 ) % MAX_FAKELAG_PACKETS;
-						}
-					}
-					// Теперь добавляем новый пакет в очередь
-					int next_tail2 = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
-					if( next_tail2 != fakelag_queue_head )
-					{
-						fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
-						int bits = MSG_GetNumBitsWritten( &buf );
-						int bytes = ( bits + 7 ) / 8;
-						
-						if( bytes <= sizeof( packet->data ) )
-						{
-							memcpy( packet->data, MSG_GetData( &buf ), bytes );
-							packet->bits = bits;
-							packet->send_time = host.realtime + ( fakelag_delay_ms / 1000.0f );
-							packet->valid = true;
-							fakelag_queue_tail = next_tail2;
-						}
-						else
-						{
-							// пакет слишком большой, отправляем сразу
-							Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
-						}
-					}
-					else
-					{
-						// все еще переполнена после освобождения места - отправляем новый пакет сразу
-						Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
-					}
+					// пакет слишком большой, отправляем сразу
+					Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
 				}
+			}
+			else
+			{
+				// очередь переполнена, отправляем сразу
+				Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
 			}
 		}
 		else
 		{
-			// bash3d fake lag (старая логика)
-			float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
-			if( fakelag_ms > 0.0f && cls.state >= ca_active )
-			{
-				// добавляем пакет в очередь с задержкой
-				int next_tail = ( fakelag_queue_tail + 1 ) % MAX_FAKELAG_PACKETS;
-				if( next_tail != fakelag_queue_head ) // проверяем, что очередь не переполнена
-				{
-					fakelag_packet_t *packet = &fakelag_queue[fakelag_queue_tail];
-					int bits = MSG_GetNumBitsWritten( &buf );
-					int bytes = ( bits + 7 ) / 8;
-					
-					if( bytes <= sizeof( packet->data ) )
-					{
-						memcpy( packet->data, MSG_GetData( &buf ), bytes );
-						packet->bits = bits;
-						packet->send_time = host.realtime + ( fakelag_ms / 1000.0f );
-						packet->valid = true;
-						fakelag_queue_tail = next_tail;
-					}
-					else
-					{
-						// пакет слишком большой, отправляем сразу
-						Netchan_TransmitBits( &cls.netchan, bits, MSG_GetData( &buf ));
-					}
-				}
-				else
-				{
-					// очередь переполнена, отправляем сразу
-					Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
-				}
-			}
-			else
-			{
-				// фейклаг выключен, отправляем сразу
-				Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
-			}
+			// фейклаг выключен, отправляем сразу
+			Netchan_TransmitBits( &cls.netchan, MSG_GetNumBitsWritten( &buf ), MSG_GetData( &buf ));
 		}
 	}
 	else
@@ -1162,12 +1046,9 @@ static void CL_SendCommand( void )
 		// clc_move, userinfo etc
 		CL_WritePacket();
 		
-		// KEK fakelag и bash3d fake lag - отправляем отложенные пакеты
-		float kek_fakelag_value = Cvar_VariableValue( "kek_fakelag" );
+		// bash3d fake lag - отправляем отложенные пакеты
 		float fakelag_ms = Cvar_VariableValue( "ebash3d_fakelag" );
-		qboolean any_fakelag = ( kek_fakelag_value > 0.0f || fakelag_ms > 0.0f );
-		
-		if( any_fakelag )
+		if( fakelag_ms > 0.0f )
 		{
 			while( fakelag_queue_head != fakelag_queue_tail )
 			{
@@ -2019,11 +1900,10 @@ void CL_Disconnect( void )
 
 	IN_LockInputDevices( false ); // unlock input devices
 	
-	// bash3d fake lag и KEK fakelag - очищаем очередь при отключении
+	// bash3d fake lag - очищаем очередь при отключении
 	fakelag_queue_head = 0;
 	fakelag_queue_tail = 0;
 	memset( fakelag_queue, 0, sizeof( fakelag_queue ));
-	kek_fakelag_packet_count = 0; // сбрасываем счетчик KEK fakelag
 
 	cls.state = ca_disconnected;
 	memset( &cls.serveradr, 0, sizeof( cls.serveradr ));
@@ -3844,12 +3724,10 @@ static void CL_InitLocal( void )
 	cls.state = ca_disconnected;
 	cls.signon = 0;
 	
-	// bash3d fake lag и KEK fakelag - очищаем очередь при отключении
+	// bash3d fake lag - очищаем очередь при отключении
 	fakelag_queue_head = 0;
 	fakelag_queue_tail = 0;
 	memset( fakelag_queue, 0, sizeof( fakelag_queue ));
-	kek_fakelag_packet_count = 0; // сбрасываем счетчик KEK fakelag
-	
 	memset( &cls.serveradr, 0, sizeof( cls.serveradr ) );
 
 	cl.resourcesneeded.pNext = cl.resourcesneeded.pPrev = &cl.resourcesneeded;
@@ -3862,8 +3740,6 @@ static void CL_InitLocal( void )
 	Cvar_RegisterVariable( &showpause );
 	Cvar_RegisterVariable( &mp_decals );
 	Cvar_RegisterVariable( &ebash3d_cmd_block );
-	Cvar_RegisterVariable( &kek_fakelag );
-	Cvar_RegisterVariable( &kek_fakelag_delay );
 	Cvar_RegisterVariable( &dev_overview );
 
 	// bash3d custom cvars
@@ -4173,8 +4049,6 @@ void CL_Init( void )
 	VID_Init();	// init video
 	S_Init();	// init sound
 	Voice_Init( VOICE_DEFAULT_CODEC, 3, true ); // init voice (do not open the device)
-	
-	ImGui_Init(); // init ImGui
 
 	// unreliable buffer. unsed for unreliable commands and voice stream
 	MSG_Init( &cls.datagram, "cls.datagram", cls.datagram_buf, sizeof( cls.datagram_buf ));
@@ -4215,8 +4089,6 @@ void CL_Shutdown( void )
 	IN_Shutdown ();
 	Mobile_Shutdown ();
 	SCR_Shutdown ();
-	
-	ImGui_Shutdown(); // shutdown ImGui
 	CL_UnloadProgs ();
 	cls.initialized = false;
 

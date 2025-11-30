@@ -18,7 +18,6 @@ GNU General Public License for more details.
 #include "client.h"
 #include "vgui_draw.h"
 #include "platform/platform.h"
-#include "ui/imgui/imgui_integration.h"
 
 typedef struct
 {
@@ -638,10 +637,6 @@ void GAME_EXPORT Key_Event( int key, int down )
 	const char	*kb;
 
 	key = Key_Rotate( key );
-
-	// ImGui key input handling
-	if( !ImGui_KeyInput( down, key, NULL ) )
-		return; // ImGui handled the key
 
 	if( OSK_KeyEvent( key, down ) )
 		return;

@@ -35,13 +35,6 @@ static inline int BitByte( int bits )
 	return PAD_NUMBER( bits, 8 ) >> 3;
 }
 
-// Forward declaration for sizebuf_t (typedef is in common.h, but we need it here for inline functions)
-#ifndef SIZEBUF_T_DEFINED
-struct sizebuf_s;
-typedef struct sizebuf_s sizebuf_t;
-#define SIZEBUF_T_DEFINED
-#endif
-
 struct sizebuf_s
 {
 	byte        *pData;
@@ -72,7 +65,7 @@ static inline void MSG_Clear( sizebuf_t *sb )
 
 static inline void MSG_InitExt( sizebuf_t *sb, const char *pDebugName, void *pData, int nBytes, int nBits )
 {
-	sb->pData = (byte *)pData;
+	sb->pData = pData;
 	MSG_Clear( sb );
 
 	if( nBits < 0 )
