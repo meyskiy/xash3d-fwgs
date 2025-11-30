@@ -18,7 +18,10 @@ GNU General Public License for more details.
 
 #include <math.h>
 #if HAVE_TGMATH_H
+// Don't include tgmath.h in C++ files as it pulls in C++ headers that conflict with extern "C"
+#ifndef __cplusplus
 #include <tgmath.h>
+#endif
 #endif
 #include <string.h>
 
