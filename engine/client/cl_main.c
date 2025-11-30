@@ -3860,6 +3860,9 @@ static void CL_InitLocal( void )
 	Cmd_AddCommand ("kek_internal_antiaim", CL_KEK_AntiAim_f, "internal antiaim angle setter" );
 	Cmd_AddCommand ("kek_internal_antiaim_reset", CL_KEK_AntiAim_Reset_f, "reset antiaim flag" );
 
+	// Cheat menu system
+	CheatMenu_Init();
+
 	Cmd_AddRestrictedCommand ("setinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of userinfo)" );
 	Cmd_AddRestrictedCommand ("userinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of setinfo)" );
 	Cmd_AddCommand ("physinfo", CL_Physinfo_f, "print current client physinfo" );

@@ -361,6 +361,15 @@ static void IN_MouseMove( void )
 
 	// if the menu is visible, move the menu cursor
 	UI_MouseMove( x, y );
+	
+	// Handle mouse movement for cheat menu (track position and update sliders)
+	if( CheatMenu_IsOpen() )
+	{
+		extern ref_globals_t refState;
+		float mx = (float)x / (float)refState.width;
+		float my = (float)y / (float)refState.height;
+		CheatMenu_HandleMouse( mx, my, false, false );
+	}
 }
 
 /*
@@ -382,7 +391,20 @@ void IN_MouseEvent( int key, int down )
 	{
 		Touch_KeyEvent( K_MOUSE1 + key, down );
 	}
-	else if( cls.key_dest == key_game )
+	// Check if cheat menu is open and handle mouse clicks first (before any other processing)
+	if( CheatMenu_IsOpen() && key == 0 ) // Only handle left mouse button
+	{
+		int x, y;
+		Platform_GetMousePos( &x, &y );
+		extern ref_globals_t refState;
+		float mx = (float)x / (float)refState.width;
+		float my = (float)y / (float)refState.height;
+		CheatMenu_HandleMouse( mx, my, down, !down );
+		// Block all mouse input when menu is open
+		return;
+	}
+	
+	if( cls.key_dest == key_game )
 	{
 		// perform button actions
 		VGui_MouseEvent( K_MOUSE1 + key, down );

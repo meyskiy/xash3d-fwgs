@@ -2972,6 +2972,33 @@ static void kek_ApplyAntiAim( ref_viewpass_t *rvp )
 		}
 		break;
 		
+	case 8: // Upside Down - flip player upside down (head to ground, feet up)
+		{
+			// Rotate 180 degrees around Y axis (yaw) to flip horizontal orientation
+			float upside_down_yaw = view_angles[YAW] + 180.0f;
+			
+			// Normalize yaw
+			while( upside_down_yaw > 180.0f ) upside_down_yaw -= 360.0f;
+			while( upside_down_yaw < -180.0f ) upside_down_yaw += 360.0f;
+			
+			// Completely invert pitch to flip player upside down
+			// Invert pitch: if looking forward (0°), flip to looking straight up (89°)
+			// Then add 180 to completely flip - player walks on head with feet up and head to ground
+			float upside_down_pitch = -view_angles[PITCH]; // Invert pitch
+			upside_down_pitch = 180.0f - upside_down_pitch; // Flip 180 degrees
+			
+			// Clamp to valid range (-89 to 89), but prefer maximum down angle for full upside down effect
+			if( upside_down_pitch > 89.0f ) upside_down_pitch = 89.0f;
+			if( upside_down_pitch < -89.0f ) upside_down_pitch = -89.0f;
+			
+			// Force maximum down angle for complete upside down effect (player looks at ground)
+			upside_down_pitch = -89.0f;
+			
+			view_angles[YAW] = upside_down_yaw;
+			view_angles[PITCH] = upside_down_pitch;
+		}
+		break;
+		
 	default:
 		// Default - jitter
 		{

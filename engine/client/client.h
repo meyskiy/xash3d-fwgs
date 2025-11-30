@@ -1248,6 +1248,24 @@ const char *ID_GetMD5( void );
 const char *ebash3d_get_id( void );
 int ebash3d_change_id( const char *new_id );
 
+//
+// cheatmenu.c
+//
+void CheatMenu_Init( void );
+void CheatMenu_Shutdown( void );
+
+//
+// cheatmenu_visual.c
+//
+void CheatMenu_Draw( void );
+void CheatMenu_Toggle( void );
+void CheatMenu_Open( void );
+void CheatMenu_Close( void );
+qboolean CheatMenu_HandleKey( int key, qboolean down );
+void CheatMenu_HandleTouch( float x, float y );
+void CheatMenu_HandleMouse( float x, float y, qboolean down, qboolean up );
+qboolean CheatMenu_IsOpen( void );
+
 extern rgba_t g_color_table[8];
 extern triangleapi_t gTriApi;
 extern net_api_t gNetApi;

@@ -641,6 +641,13 @@ void GAME_EXPORT Key_Event( int key, int down )
 	if( OSK_KeyEvent( key, down ) )
 		return;
 
+	// Check if cheat menu is open and handle events
+	if( CheatMenu_IsOpen() )
+	{
+		if( CheatMenu_HandleKey( key, down ) )
+			return; // Menu handled the event
+	}
+
 	// key was pressed before engine was run
 	if( !keys[key].down && !down )
 		return;
@@ -657,7 +664,8 @@ void GAME_EXPORT Key_Event( int key, int down )
 	}
 #endif
 	// distribute the key down event to the apropriate handler
-	if( cls.key_dest == key_game && ( down || keys[key].gamedown ))
+	// Block game input if cheat menu is open
+	if( cls.key_dest == key_game && ( down || keys[key].gamedown ) && !CheatMenu_IsOpen() )
 	{
 		if( !clgame.dllFuncs.pfnKey_Event( down, key, keys[key].binding ))
 		{
@@ -673,6 +681,11 @@ void GAME_EXPORT Key_Event( int key, int down )
 			}
 			return; // handled in client.dll
 		}
+	}
+	else if( cls.key_dest == key_game && CheatMenu_IsOpen() )
+	{
+		// Block game input when menu is open
+		return;
 	}
 
 	// update auto-repeat status

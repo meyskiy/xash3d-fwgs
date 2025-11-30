@@ -599,6 +599,7 @@ void V_PostRender( void )
 		UI_UpdateMenu( host.realtime );
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
+		CheatMenu_Draw(); // Draw cheat menu
 		Touch_Draw();
 		OSK_Draw();
 
