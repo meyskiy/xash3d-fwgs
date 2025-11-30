@@ -2091,6 +2091,8 @@ int IN_TouchEvent( touchEventType type, int fingerID, float x, float y, float dx
 
 
 //	Con_Printf("%f %f\n", TO_SCRN_X(x), TO_SCRN_Y(y));
+	
+	
 	// simulate menu mouse click
 	if( cls.key_dest != key_game && !touch_in_menu.value )
 	{
@@ -2182,13 +2184,6 @@ int IN_TouchEvent( touchEventType type, int fingerID, float x, float y, float dx
 		return false;
 
 	y *= (float)refState.height / refState.width / Touch_AspectRatio();
-
-	// Check if cheat menu is open and handle touch events
-	if( CheatMenu_IsOpen() && type == event_down )
-	{
-		CheatMenu_HandleTouch( x, y );
-		return true;
-	}
 
 	if( clgame.dllFuncs.pfnTouchEvent && clgame.dllFuncs.pfnTouchEvent( type, fingerID, x, y, dx, dy ) )
 		return true;

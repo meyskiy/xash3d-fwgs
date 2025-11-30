@@ -111,6 +111,7 @@ static void CL_ParseSoundPacket( sizebuf_t *msg )
 	{
 		S_StartSound( pos, entnum, chan, handle, volume, attn, pitch, flags );
 	}
+	
 }
 
 /*

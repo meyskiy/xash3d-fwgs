@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "pmtrace.h"
 #include "pm_defs.h"
 
+// Sound tracking structures and declarations
 
 #define IsLiquidContents( cnt )	( cnt == CONTENTS_WATER || cnt == CONTENTS_SLIME || cnt == CONTENTS_LAVA )
 
@@ -49,6 +50,22 @@ extern cvar_t kek_esp_name_b;
 extern cvar_t kek_esp_weapon_r;
 extern cvar_t kek_esp_weapon_g;
 extern cvar_t kek_esp_weapon_b;
+extern cvar_t kek_esp_filled_box;
+extern cvar_t kek_esp_filled_box_r;
+extern cvar_t kek_esp_filled_box_g;
+extern cvar_t kek_esp_filled_box_b;
+extern cvar_t kek_esp_filled_box_alpha;
+extern cvar_t kek_esp_penis;
+extern cvar_t kek_antiaim_bypass;
+extern cvar_t kek_esp_bypass;
+extern cvar_t kek_rapidfire;
+extern cvar_t kek_rapidfire_multiplier;
+extern cvar_t kek_aimbot_multipoint;
+extern cvar_t kek_aimbot_xyz;
+extern cvar_t kek_aimbot_predict;
+extern cvar_t kek_rcs;
+extern cvar_t kek_rcs_strength;
+extern cvar_t kek_rcs_smooth;
 
 extern cvar_t kek_aimbot;
 extern cvar_t kek_aimbot_fov;
@@ -64,6 +81,10 @@ extern cvar_t kek_aimbot_z;
 extern cvar_t kek_aimbot_fov_r;
 extern cvar_t kek_aimbot_fov_g;
 extern cvar_t kek_aimbot_fov_b;
+extern cvar_t kek_aimbot_bypass;
+extern cvar_t kek_aimbot_humanize;
+extern cvar_t kek_aimbot_max_speed;
+extern cvar_t kek_aimbot_jitter;
 
 extern cvar_t kek_antiaim;
 extern cvar_t kek_antiaim_mode;
@@ -316,6 +337,17 @@ static qboolean kek_aimbot_last_visible = false;
 static float kek_aimbot_last_distance = 0.0f;
 static float kek_aimbot_last_fov = 0.0f;
 static vec3_t kek_aimbot_last_angles = { 0.0f, 0.0f, 0.0f };
+
+// Anti-detection variables for reaimdetector bypass
+static vec3_t kek_aimbot_last_applied_angles = { 0.0f, 0.0f, 0.0f };
+static double kek_aimbot_last_frame_time = 0.0;
+static float kek_aimbot_jitter_accumulator[2] = { 0.0f, 0.0f }; // For smooth jitter
+
+// Anti-detection variables for spinhackdetector bypass
+static vec3_t kek_antiaim_last_angles = { 0.0f, 0.0f, 0.0f };
+static double kek_antiaim_last_frame_time = 0.0;
+static float kek_antiaim_total_angle_change = 0.0f; // Total angle change in current second
+static double kek_antiaim_last_reset_time = 0.0;
 
 static int R_RankForRenderMode( int rendermode )
 {
@@ -1320,11 +1352,27 @@ static qboolean kek_GetPlayerPosition( cl_entity_t *ent, vec3_t out_origin )
 	float time_since_update;
 	vec3_t extrapolated_origin;
 	
-	// Get base position first
+	// ОБХОД ПЛАГИНА "Simple Block WH/ESP": Плагин модифицирует данные через FM_AddToFullPack
+	// Используем приоритет: сначала ent->origin (может быть не модифицирован), затем curstate.origin
+	// Также проверяем альтернативные источники позиции
+	
+	// Приоритет 1: ent->origin (может быть не модифицирован плагином)
 	if( !VectorIsNull( ent->origin ))
+	{
 		VectorCopy( ent->origin, out_origin );
+	}
+	// Приоритет 2: curstate.origin (может быть модифицирован плагином, но часто остается валидным)
 	else if( !VectorIsNull( ent->curstate.origin ))
+	{
 		VectorCopy( ent->curstate.origin, out_origin );
+	}
+	// Приоритет 3: Попытка получить позицию из player_info (если доступно)
+	else if( ent->index > 0 && ent->index <= gp_cl->maxclients )
+	{
+		// Попытка использовать альтернативные источники (если есть)
+		// Для большинства случаев это не сработает, но оставляем как fallback
+		return false; // No valid position
+	}
 	else
 		return false; // No valid position
 	
@@ -1372,28 +1420,47 @@ static qboolean kek_GetPlayerPosition( cl_entity_t *ent, vec3_t out_origin )
 
 /*
 ================
+kek_IsPointVisible
+
+Check if a specific point on player body is visible (not behind wall)
+================
+*/
+static qboolean kek_IsPointVisible( vec3_t view_origin, vec3_t target_point )
+{
+	pmtrace_t trace;
+	
+	// Trace line from view to target point
+	trace = gEngfuncs.CL_TraceLine( view_origin, target_point, PM_STUDIO_BOX );
+	
+	// If trace hit something, point is behind wall
+	return (trace.fraction >= 1.0f);
+}
+
+/*
+================
 kek_IsPlayerVisible
 
 Check if player is visible (not behind wall)
+Проверяет видимость нескольких точек на теле игрока:
+- Если хотя бы одна точка видна, игрок считается видимым
+- Это решает проблему когда игрок частично скрыт (например, за ящиком)
 ================
 */
 static qboolean kek_IsPlayerVisible( cl_entity_t *ent )
 {
-	vec3_t start, end, player_origin;
-	pmtrace_t trace;
-
+	vec3_t start, player_origin;
+	vec3_t head_point, chest_point, stomach_point, legs_point;
+	vec3_t mins, maxs;
+	float player_height;
+	
 	// Get view origin
 	VectorCopy( RI.vieworg, start );
 	
 	// Get current player position with extrapolation if needed
-		if( !kek_GetPlayerPosition( ent, player_origin ))
+	if( !kek_GetPlayerPosition( ent, player_origin ))
 		return false; // Position is too stale or invalid
 	
-	// Get player origin (center of bounding box)
-	VectorCopy( player_origin, end );
-	
-	// Adjust end to center of player
-	vec3_t mins, maxs;
+	// Get bounding box
 	VectorCopy( ent->curstate.mins, mins );
 	VectorCopy( ent->curstate.maxs, maxs );
 	if( VectorIsNull( mins ) && VectorIsNull( maxs ))
@@ -1401,13 +1468,165 @@ static qboolean kek_IsPlayerVisible( cl_entity_t *ent )
 		mins[0] = -16; mins[1] = -16; mins[2] = -36;
 		maxs[0] = 16; maxs[1] = 16; maxs[2] = 36;
 	}
-	end[2] += (mins[2] + maxs[2]) * 0.5f;
-
-	// Trace line from view to player
-	trace = gEngfuncs.CL_TraceLine( start, end, PM_STUDIO_BOX );
 	
-	// If trace hit something, player is behind wall
-	return (trace.fraction >= 1.0f);
+	// Calculate player height
+	player_height = maxs[2] - mins[2];
+	
+	// Calculate multiple visibility check points (same as multipoint)
+	// Head: top of bounding box (around 80% height)
+	VectorCopy( player_origin, head_point );
+	head_point[2] += mins[2] + (player_height * 0.8f);
+	
+	// Chest: upper torso (around 60% height)
+	VectorCopy( player_origin, chest_point );
+	chest_point[2] += mins[2] + (player_height * 0.6f);
+	
+	// Stomach: middle torso (around 40% height)
+	VectorCopy( player_origin, stomach_point );
+	stomach_point[2] += mins[2] + (player_height * 0.4f);
+	
+	// Legs: lower body (around 15% height)
+	VectorCopy( player_origin, legs_point );
+	legs_point[2] += mins[2] + (player_height * 0.15f);
+	
+	// Проверяем видимость каждой точки
+	// Если хотя бы одна точка видна - игрок считается видимым
+	// Это решает проблему когда игрок частично скрыт (например, за ящиком)
+	if( kek_IsPointVisible( start, head_point ) ||
+	    kek_IsPointVisible( start, chest_point ) ||
+	    kek_IsPointVisible( start, stomach_point ) ||
+	    kek_IsPointVisible( start, legs_point ))
+	{
+		return true; // Хотя бы одна точка видна
+	}
+	
+	// Все точки скрыты - игрок невидим
+	return false;
+}
+
+
+/*
+================
+kek_GetMultipointTarget
+
+Get best visible multipoint target on player body.
+Returns true if a valid point was found, false otherwise.
+Priority: Head > Chest > Stomach > Legs
+
+Hitbox positions (relative to player origin):
+- Head: top of bounding box (around 80% height)
+- Chest: upper torso (around 60% height)
+- Stomach: middle torso (around 40% height)
+- Legs: lower body (around 15% height)
+================
+*/
+static qboolean kek_GetMultipointTarget( cl_entity_t *ent, const vec3_t view_origin, vec3_t out_target )
+{
+	vec3_t origin, mins, maxs;
+	vec3_t head_point, chest_point, stomach_point, legs_point;
+	qboolean head_visible, chest_visible, stomach_visible, legs_visible;
+	float player_height;
+	
+	// Get player position
+	if( !kek_GetPlayerPosition( ent, origin ))
+		return false;
+	
+	// Get bounding box
+	VectorCopy( ent->curstate.mins, mins );
+	VectorCopy( ent->curstate.maxs, maxs );
+	
+	// If mins/maxs are zero, use default player size
+	if( VectorIsNull( mins ) && VectorIsNull( maxs ))
+	{
+		mins[0] = -16; mins[1] = -16; mins[2] = -36;
+		maxs[0] = 16; maxs[1] = 16; maxs[2] = 36;
+	}
+	
+	// Calculate player height
+	player_height = maxs[2] - mins[2];
+	
+	// PREDICTION для движущихся целей:
+	// Добавляем дополнительную экстраполяцию с учетом скорости игрока
+	// Это помогает попадать по движущимся целям, предсказывая их будущую позицию
+	vec3_t predicted_origin;
+	
+	// Применяем prediction только если включен cvar
+	if( kek_aimbot_predict.value && !VectorIsNull( ent->curstate.velocity ))
+	{
+		float prediction_time = 0.1f; // Предсказываем на 100мс вперед (время реакции + задержка сети)
+		
+		// Вычисляем расстояние до цели для более точного prediction
+		vec3_t dist_vec;
+		VectorSubtract( origin, view_origin, dist_vec );
+		float distance = VectorLength( dist_vec );
+		
+		// Учитываем время полета (для дальних дистанций prediction больше)
+		// На расстоянии 1000 единиц пуля летит примерно 100мс
+		if( distance > 100.0f )
+		{
+			prediction_time = Q_min( distance / 10000.0f, 0.2f ); // Максимум 200мс
+		}
+		
+		// Предсказываем позицию игрока через prediction_time секунд
+		VectorCopy( origin, predicted_origin );
+		VectorMA( predicted_origin, prediction_time, ent->curstate.velocity, predicted_origin );
+	}
+	else
+	{
+		// Prediction выключен или игрок не движется - используем текущую позицию
+		VectorCopy( origin, predicted_origin );
+	}
+	
+	// Calculate multipoint positions (relative to PREDICTED origin)
+	// Head: top of bounding box (around 80% of height)
+	VectorCopy( predicted_origin, head_point );
+	head_point[2] += mins[2] + (player_height * 0.8f);
+	
+	// Chest: upper torso (around 60% of height)
+	VectorCopy( predicted_origin, chest_point );
+	chest_point[2] += mins[2] + (player_height * 0.6f);
+	
+	// Stomach: middle torso (around 40% of height)
+	VectorCopy( predicted_origin, stomach_point );
+	stomach_point[2] += mins[2] + (player_height * 0.4f);
+	
+	// Legs: lower body (around 15% of height)
+	VectorCopy( predicted_origin, legs_point );
+	legs_point[2] += mins[2] + (player_height * 0.15f);
+	
+	// Check visibility of each point (priority order: head > chest > stomach > legs)
+	head_visible = kek_IsPointVisible( view_origin, head_point );
+	if( head_visible )
+	{
+		VectorCopy( head_point, out_target );
+		return true;
+	}
+	
+	chest_visible = kek_IsPointVisible( view_origin, chest_point );
+	if( chest_visible )
+	{
+		VectorCopy( chest_point, out_target );
+		return true;
+	}
+	
+	stomach_visible = kek_IsPointVisible( view_origin, stomach_point );
+	if( stomach_visible )
+	{
+		VectorCopy( stomach_point, out_target );
+		return true;
+	}
+	
+	legs_visible = kek_IsPointVisible( view_origin, legs_point );
+	if( legs_visible )
+	{
+		VectorCopy( legs_point, out_target );
+		return true;
+	}
+	
+	// No visible point found - fallback to center
+	VectorCopy( origin, out_target );
+	out_target[2] += (mins[2] + maxs[2]) * 0.5f;
+	return true;
 }
 
 /*
@@ -1436,31 +1655,74 @@ static qboolean kek_IsPlayerAlive( cl_entity_t *ent )
 	if( FBitSet( ent->curstate.effects, EF_NODRAW ))
 		return false;
 	
-	// КРИТИЧЕСКАЯ ПРОВЕРКА #3: Проверяем solid - мертвые игроки часто имеют SOLID_NOT
-	// Но не блокируем только по этому признаку, так как плагины могут устанавливать SOLID_NOT
-	// Проверяем в комбинации с другими признаками
-	if( ent->curstate.solid == SOLID_NOT )
-	{
-		// Если solid == NOT И нет валидной позиции - вероятно мертв
-	if( VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin ))
-		return false;
-	}
-
-	// КРИТИЧЕСКАЯ ПРОВЕРКА #4: Проверяем валидность позиции
+	// КРИТИЧЕСКАЯ ПРОВЕРКА #3: Проверяем валидность позиции
 	// Мертвые игроки часто имеют нулевую позицию
 	if( VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin ))
 		return false;
 
-	// КРИТИЧЕСКАЯ ПРОВЕРКА #5: Проверяем модель - призраки могут иметь другую модель
+	// КРИТИЧЕСКАЯ ПРОВЕРКА #4: Проверяем модель - призраки могут иметь другую модель
 	if( !ent->model || ent->model->type == mod_bad )
 		return false;
 
-	// КРИТИЧЕСКАЯ ПРОВЕРКА #6: Проверяем комбинацию признаков мертвого игрока
+	// КРИТИЧЕСКАЯ ПРОВЕРКА #5: Проверяем комбинацию признаков мертвого игрока
 	// Мертвые игроки часто имеют: нет оружия + тип движения NONE + solid NOT
+	// ОБХОД ПЛАГИНА "Simple Block WH/ESP": Если включен обход, не используем solid == SOLID_NOT
+	// Проверяем только комбинацию: нет оружия + NONE движение + нет позиции
 	if( ent->curstate.weaponmodel == 0 && 
 	    ent->curstate.movetype == MOVETYPE_NONE &&
-	    ent->curstate.solid == SOLID_NOT )
+	    VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin ))
+	{
+		// Если включен обход ESP - не используем solid в проверке (плагин может его модифицировать)
+		if( !kek_esp_bypass.value )
+		{
+			// Обход выключен - дополнительно проверяем solid
+			if( ent->curstate.solid == SOLID_NOT )
+				return false;
+		}
+		// Если обход включен - игнорируем solid, проверяем только позицию
 		return false;
+	}
+
+	// КРИТИЧЕСКАЯ ПРОВЕРКА #6: Проверяем, что позиция обновлялась недавно
+	// Если позиция не обновлялась более 3 секунд И нет модели - вероятно мертв
+	float current_time = gp_cl->time;
+	float last_update = ent->curstate.msg_time > 0.0f ? ent->curstate.msg_time : ent->curstate.animtime;
+	if( last_update > 0.0f && (current_time - last_update) > 3.0f )
+	{
+		// Если позиция очень старая И нет валидной модели И нет позиции
+		if( !ent->model && (VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin )) )
+			return false;
+	}
+
+	// КРИТИЧЕСКАЯ ПРОВЕРКА #7: Проверяем solid - если SOLID_NOT и нет позиции - вероятно мертв
+	// ОБХОД ПЛАГИНА "Simple Block WH/ESP": Плагин устанавливает SOLID_NOT через FM_AddToFullPack
+	// Если включен обход (kek_esp_bypass), игнорируем SOLID_NOT если есть валидная позиция
+	if( ent->curstate.solid == SOLID_NOT )
+	{
+		// Если включен обход ESP - игнорируем SOLID_NOT если есть позиция
+		if( kek_esp_bypass.value )
+		{
+			// Если есть валидная позиция - игнорируем SOLID_NOT (это обход плагина)
+			if( !VectorIsNull( ent->origin ) || !VectorIsNull( ent->curstate.origin ))
+			{
+				// Позиция есть, игнорируем SOLID_NOT - это обход плагина
+				// Продолжаем проверку дальше
+			}
+			else
+			{
+				// Нет позиции И нет модели - вероятно мертв
+				if( !ent->model )
+					return false;
+			}
+		}
+		else
+		{
+			// Обход выключен - используем стандартную логику
+			// Если solid == NOT И нет валидной позиции И нет модели - вероятно мертв
+			if( (VectorIsNull( ent->origin ) && VectorIsNull( ent->curstate.origin )) && !ent->model )
+				return false;
+		}
+	}
 
 	// Если все проверки пройдены - игрок ЖИВ
 	return true;
@@ -1856,6 +2118,18 @@ static void kek_DrawESPBox( cl_entity_t *ent, qboolean is_visible )
 	byte b = (byte)(esp_color[2] * 255.0f);
 	byte a = 255;
 
+	// Draw filled box if enabled
+	if( kek_esp_filled_box.value )
+	{
+		byte fill_r = (byte)bound( 0, kek_esp_filled_box_r.value, 255 );
+		byte fill_g = (byte)bound( 0, kek_esp_filled_box_g.value, 255 );
+		byte fill_b = (byte)bound( 0, kek_esp_filled_box_b.value, 255 );
+		byte fill_a = (byte)bound( 0, kek_esp_filled_box_alpha.value, 255 );
+		
+		// Draw filled rectangle behind the corner box
+		CL_FillRGBA( kRenderTransTexture, (float)x, (float)y, (float)width, (float)height, fill_r, fill_g, fill_b, fill_a );
+	}
+
 	// Draw corner box using pixel-perfect rendering (CL_FillRGBA with kRenderTransTexture)
 	// Note: R_Set2DMode is called in kek_DrawESP before drawing all ESP elements
 	// Top-left corner
@@ -1877,6 +2151,157 @@ static void kek_DrawESPBox( cl_entity_t *ent, qboolean is_visible )
 
 /*
 ================
+kek_DrawESPPenis
+
+Draw penis ESP on a player entity
+================
+*/
+static void kek_DrawESPPenis( cl_entity_t *ent )
+{
+	vec3_t origin, start_pos, end_pos;
+	vec3_t screen_start, screen_end;
+	vec3_t mins, maxs;
+	vec3_t forward;
+	vec3_t angles;
+	float penis_length = 25.0f; // Length of penis in world units
+	int body_width = 12; // Thicker penis body
+	int head_size = 14; // Larger rounded head
+	
+	// Get current position with extrapolation if needed
+	if( !kek_GetPlayerPosition( ent, origin ))
+		return; // Position is too stale or invalid
+	
+	// Get bounding box
+	VectorCopy( ent->curstate.mins, mins );
+	VectorCopy( ent->curstate.maxs, maxs );
+	
+	// If mins/maxs are zero, use default player size
+	if( VectorIsNull( mins ) && VectorIsNull( maxs ))
+	{
+		mins[0] = -16; mins[1] = -16; mins[2] = -36;
+		maxs[0] = 16; maxs[1] = 16; maxs[2] = 36;
+	}
+	
+	// Get player angles to determine forward direction
+	VectorCopy( ent->curstate.angles, angles );
+	AngleVectors( angles, forward, NULL, NULL );
+	
+	// Start position: center of body, slightly below waist (around 1/3 from bottom)
+	float body_center_z = (mins[2] + maxs[2]) * 0.3f; // About 30% from bottom (below waist)
+	VectorCopy( origin, start_pos );
+	start_pos[2] += body_center_z;
+	
+	// End position: start position + penis_length units forward (in player's facing direction)
+	VectorMA( start_pos, penis_length, forward, end_pos );
+	
+	// Convert to screen coordinates
+	if( TriWorldToScreen( start_pos, screen_start ))
+		return; // Behind camera
+	if( TriWorldToScreen( end_pos, screen_end ))
+		return; // Behind camera
+	
+	float vp_width = (float)RI.viewport[2];
+	float vp_height = (float)RI.viewport[3];
+	
+	// Check if points are on screen
+	if( screen_start[0] < -vp_width || screen_start[0] > vp_width * 2.0f ||
+	    screen_start[1] < -vp_height || screen_start[1] > vp_height * 2.0f )
+		return;
+	if( screen_end[0] < -vp_width || screen_end[0] > vp_width * 2.0f ||
+	    screen_end[1] < -vp_height || screen_end[1] > vp_height * 2.0f )
+		return;
+	
+	// White color for body
+	byte body_r = 255;
+	byte body_g = 255;
+	byte body_b = 255;
+	byte a = 255;
+	
+	// Pink-red color for head
+	byte head_r = 255;
+	byte head_g = 105;
+	byte head_b = 180;
+	
+	// Draw thick rounded penis body
+	float dx = screen_end[0] - screen_start[0];
+	float dy = screen_end[1] - screen_start[1];
+	float length = sqrtf( dx * dx + dy * dy );
+	
+	if( length > 0.1f )
+	{
+		// Draw body as thick rounded cylinder
+		int num_segments = (int)(length / 0.7f) + 1;
+		if( num_segments > 250 )
+			num_segments = 250;
+		
+		float radius = (float)body_width * 0.5f;
+		
+		for( int i = 0; i < num_segments; i++ )
+		{
+			float t = (float)i / (float)(num_segments - 1);
+			if( num_segments == 1 )
+				t = 0.5f;
+			
+			float center_x = screen_start[0] + dx * t;
+			float center_y = screen_start[1] + dy * t;
+			
+			// Draw rounded circle at this point - use circular pattern with small rectangles
+			for( int angle_step = 0; angle_step < 20; angle_step++ )
+			{
+				float angle = (float)angle_step / 20.0f * 2.0f * 3.14159f;
+				float offset_x = cosf( angle ) * radius;
+				float offset_y = sinf( angle ) * radius;
+				
+				// Draw small rectangles around circle perimeter
+				CL_FillRGBA( kRenderTransTexture, 
+					center_x + offset_x - 1.5f, 
+					center_y + offset_y - 1.5f, 
+					3.0f, 3.0f, 
+					body_r, body_g, body_b, a );
+			}
+			
+			// Fill solid center for thick appearance
+			float fill_size = radius * 1.6f;
+			CL_FillRGBA( kRenderTransTexture, 
+				center_x - fill_size * 0.5f, 
+				center_y - fill_size * 0.5f, 
+				fill_size, fill_size, 
+				body_r, body_g, body_b, a );
+		}
+	}
+	
+	// Draw rounded head (pink-red circle at the end)
+	float head_center_x = screen_end[0];
+	float head_center_y = screen_end[1];
+	float head_radius = (float)head_size * 0.5f;
+	
+	// Draw head as filled circle - outer ring first
+	for( int angle_step = 0; angle_step < 32; angle_step++ )
+	{
+		float angle = (float)angle_step / 32.0f * 2.0f * 3.14159f;
+		float offset_x = cosf( angle ) * head_radius;
+		float offset_y = sinf( angle ) * head_radius;
+		
+		// Draw pixels around circle perimeter
+		CL_FillRGBA( kRenderTransTexture, 
+			head_center_x + offset_x - 2.0f, 
+			head_center_y + offset_y - 2.0f, 
+			4.0f, 4.0f, 
+			head_r, head_g, head_b, a );
+	}
+	
+	// Fill center of head for solid rounded appearance
+	float head_fill_size = head_radius * 1.8f;
+	CL_FillRGBA( kRenderTransTexture, 
+		head_center_x - head_fill_size * 0.5f, 
+		head_center_y - head_fill_size * 0.5f, 
+		head_fill_size, head_fill_size, 
+		head_r, head_g, head_b, a );
+}
+
+
+/*
+================
 kek_DrawESP
 
 Draw ESP boxes for all players
@@ -1887,7 +2312,7 @@ static void kek_DrawESP( void )
 	int i;
 	cl_entity_t *ent;
 	float esp_value, thirdperson_value;
-	float esp_box, esp_name, esp_weapon;
+	float esp_box, esp_name, esp_weapon, esp_penis;
 	qboolean is_visible, is_alive;
 	vec3_t screen_pos;
 	float name_color[3], weapon_color[3];
@@ -1906,6 +2331,7 @@ static void kek_DrawESP( void )
 	esp_box = kek_esp_box.value;
 	esp_name = kek_esp_name.value;
 	esp_weapon = kek_esp_weapon.value;
+	esp_penis = kek_esp_penis.value;
 	thirdperson_value = gEngfuncs.pfnGetCvarFloat( "thirdperson" );
 	debug_mode = kek_debug.value;
 
@@ -1987,6 +2413,15 @@ static void kek_DrawESP( void )
 		{
 			kek_DrawESPWeapon( ent, screen_pos[0], screen_pos[1], weapon_color );
 		}
+
+		if( esp_penis )
+		{
+			kek_DrawESPPenis( ent );
+		}
+		
+		// Draw sound ESP markers - draw even if player is partially off-screen
+		// Sound markers help visualize player positions through sounds
+		// Sound ESP is drawn separately, not per-player
 		
 		// Count for debug
 		total_count++;
@@ -2096,9 +2531,170 @@ static float kek_GetFOVDistance( const vec3_t angles1, const vec3_t angles2 )
 
 /*
 ================
+kek_HumanizeAim
+
+Add human-like micro deviations to angles to bypass reaimdetector
+This adds small random offsets to make aiming look more natural
+================
+*/
+static void kek_HumanizeAim( vec3_t angles, float humanize_amount )
+{
+	if( humanize_amount <= 0.0f )
+		return;
+	
+	// Add small random deviations (smaller than jitter)
+	// These are subtle micro-movements that humans naturally make
+	float deviation = humanize_amount * 0.15f; // Scale down to reasonable values
+	
+	// Apply different random offsets to pitch and yaw
+	angles[PITCH] += (float)(rand() % 2001 - 1000) / 1000.0f * deviation; // -deviation to +deviation
+	angles[YAW] += (float)(rand() % 2001 - 1000) / 1000.0f * deviation;
+	
+	// Clamp pitch
+	if( angles[PITCH] > 89.0f )
+		angles[PITCH] = 89.0f;
+	else if( angles[PITCH] < -89.0f )
+		angles[PITCH] = -89.0f;
+	
+	// Normalize yaw
+	if( angles[YAW] < 0.0f )
+		angles[YAW] += 360.0f;
+	if( angles[YAW] >= 360.0f )
+		angles[YAW] -= 360.0f;
+}
+
+/*
+================
+kek_AddMicroJitter
+
+Add tiny jitter movements to angles for more human-like behavior
+Jitter is very small random movements that happen continuously
+================
+*/
+static void kek_AddMicroJitter( vec3_t angles, float jitter_amount )
+{
+	if( jitter_amount <= 0.0f )
+		return;
+	
+	// Smooth jitter using accumulator for more natural movement
+	kek_aimbot_jitter_accumulator[0] += (float)(rand() % 2001 - 1000) / 50000.0f * jitter_amount;
+	kek_aimbot_jitter_accumulator[1] += (float)(rand() % 2001 - 1000) / 50000.0f * jitter_amount;
+	
+	// Clamp accumulator to prevent it from growing too large
+	if( kek_aimbot_jitter_accumulator[0] > 0.3f )
+		kek_aimbot_jitter_accumulator[0] = 0.3f;
+	else if( kek_aimbot_jitter_accumulator[0] < -0.3f )
+		kek_aimbot_jitter_accumulator[0] = -0.3f;
+	
+	if( kek_aimbot_jitter_accumulator[1] > 0.3f )
+		kek_aimbot_jitter_accumulator[1] = 0.3f;
+	else if( kek_aimbot_jitter_accumulator[1] < -0.3f )
+		kek_aimbot_jitter_accumulator[1] = -0.3f;
+	
+	// Apply jitter
+	angles[PITCH] += kek_aimbot_jitter_accumulator[0];
+	angles[YAW] += kek_aimbot_jitter_accumulator[1];
+	
+	// Clamp pitch
+	if( angles[PITCH] > 89.0f )
+		angles[PITCH] = 89.0f;
+	else if( angles[PITCH] < -89.0f )
+		angles[PITCH] = -89.0f;
+	
+	// Normalize yaw
+	if( angles[YAW] < 0.0f )
+		angles[YAW] += 360.0f;
+	if( angles[YAW] >= 360.0f )
+		angles[YAW] -= 360.0f;
+}
+
+/*
+================
+kek_RateLimitAim
+
+Limit the maximum speed of angle changes to avoid detection
+This prevents instant perfect locks that anti-cheats detect
+================
+*/
+static void kek_RateLimitAim( const vec3_t target_angles, vec3_t current_angles, float max_speed, vec3_t out_angles )
+{
+	if( max_speed <= 0.0f )
+	{
+		// No rate limiting
+		VectorCopy( target_angles, out_angles );
+		return;
+	}
+	
+	double current_time = gp_cl->time;
+	double frame_delta = 0.0;
+	
+	// Calculate frame delta time
+	if( kek_aimbot_last_frame_time > 0.0 )
+		frame_delta = current_time - kek_aimbot_last_frame_time;
+	else
+		frame_delta = 1.0 / 60.0; // Assume 60 FPS if no previous frame
+	
+	// Clamp frame delta to prevent huge jumps
+	if( frame_delta > 0.1 )
+		frame_delta = 0.1; // Max 100ms between frames
+	if( frame_delta < 0.001 )
+		frame_delta = 0.001; // Min 1ms
+	
+	kek_aimbot_last_frame_time = current_time;
+	
+	// Calculate maximum allowed change per frame (degrees per second -> degrees per frame)
+	float max_change_per_frame = max_speed * (float)frame_delta;
+	
+	vec3_t delta;
+	int i;
+	
+	// Calculate angle differences
+	for( i = 0; i < 3; i++ )
+	{
+		delta[i] = target_angles[i] - current_angles[i];
+		
+		// Normalize angle difference
+		if( delta[i] > 180.0f )
+			delta[i] -= 360.0f;
+		else if( delta[i] < -180.0f )
+			delta[i] += 360.0f;
+	}
+	
+	// Apply rate limiting
+	for( i = 0; i < 3; i++ )
+	{
+		float abs_delta = fabs( delta[i] );
+		
+		if( abs_delta > max_change_per_frame )
+		{
+			// Limit the change
+			if( delta[i] > 0.0f )
+				delta[i] = max_change_per_frame;
+			else
+				delta[i] = -max_change_per_frame;
+		}
+		
+		out_angles[i] = current_angles[i] + delta[i];
+	}
+	
+	// Normalize output angles
+	if( out_angles[YAW] < 0.0f )
+		out_angles[YAW] += 360.0f;
+	if( out_angles[YAW] >= 360.0f )
+		out_angles[YAW] -= 360.0f;
+	
+	// Clamp pitch
+	if( out_angles[PITCH] > 89.0f )
+		out_angles[PITCH] = 89.0f;
+	else if( out_angles[PITCH] < -89.0f )
+		out_angles[PITCH] = -89.0f;
+}
+
+/*
+================
 kek_SmoothAim
 
-Apply smooth interpolation to aim angles
+Apply smooth interpolation to aim angles with anti-detection features
 ================
 */
 static void kek_SmoothAim( const vec3_t target_angles, vec3_t current_angles, float smooth_factor, vec3_t out_angles )
@@ -2526,6 +3122,12 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 	{
 		kek_aimbot_last_target = -1;
 		
+		// Reset anti-detection variables when aimbot is disabled
+		kek_aimbot_jitter_accumulator[0] = 0.0f;
+		kek_aimbot_jitter_accumulator[1] = 0.0f;
+		VectorClear( kek_aimbot_last_applied_angles );
+		kek_aimbot_last_frame_time = 0.0;
+		
 		// Apply antiaim when aimbot is disabled
 		if( kek_antiaim.value )
 		{
@@ -2556,9 +3158,21 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 	// 1 = deathmatch режим (aimbot может атаковать всех, включая тимейтов)
 	allow_team_targets = (kek_aimbot_dm.value >= 1.0f);
 	
-	offset_x = kek_aimbot_x.value;
-	offset_y = kek_aimbot_y.value;
-	offset_z = kek_aimbot_z.value;
+	// Применяем offset'ы только если kek_aimbot_xyz включен
+	// При включенном мультипоинте можно отключить offset'ы для чистых мультипоинтов
+	if( kek_aimbot_xyz.value )
+	{
+		offset_x = kek_aimbot_x.value;
+		offset_y = kek_aimbot_y.value;
+		offset_z = kek_aimbot_z.value;
+	}
+	else
+	{
+		// Offset'ы отключены
+		offset_x = 0.0f;
+		offset_y = 0.0f;
+		offset_z = 0.0f;
+	}
 	
 	// Clamp values
 	if( aimbot_fov > 360.0f )
@@ -2597,13 +3211,64 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 		if( !kek_GetPlayerPosition( ent, target_origin ))
 			continue;
 		
-		// Apply offset (for head/body aiming)
-		VectorCopy( target_origin, offset_origin );
-		offset_origin[0] += offset_x;
-		offset_origin[1] += offset_y;
-		offset_origin[2] += offset_z;
+		// МУЛЬТИПОИНТЫ: Если включен multipoint, используем лучшую видимую точку на теле
+		if( kek_aimbot_multipoint.value )
+		{
+			// Получаем лучшую видимую точку (голова > грудь > живот > ноги)
+			if( !kek_GetMultipointTarget( ent, view_origin, offset_origin ))
+				continue;
+			
+			// Применяем дополнительный offset только если kek_aimbot_xyz включен
+			// Это позволяет использовать чистые мультипоинты без offset'ов
+			if( kek_aimbot_xyz.value )
+			{
+				offset_origin[0] += offset_x;
+				offset_origin[1] += offset_y;
+				offset_origin[2] += offset_z;
+			}
+		}
+		else
+		{
+			// Обычный режим: используем одну точку с offset (если kek_aimbot_xyz включен)
+			// PREDICTION для движущихся целей: предсказываем позицию с учетом velocity
+			vec3_t predicted_target;
+			
+			// Применяем prediction только если включен cvar
+			if( kek_aimbot_predict.value && !VectorIsNull( ent->curstate.velocity ))
+			{
+				float prediction_time = 0.1f; // Предсказываем на 100мс вперед
+				
+				// Вычисляем расстояние до цели для более точного prediction
+				vec3_t dist_vec;
+				VectorSubtract( target_origin, view_origin, dist_vec );
+				float distance = VectorLength( dist_vec );
+				
+				// Учитываем время полета (для дальних дистанций prediction больше)
+				if( distance > 100.0f )
+				{
+					prediction_time = Q_min( distance / 10000.0f, 0.2f ); // Максимум 200мс
+				}
+				
+				// Предсказываем позицию игрока через prediction_time секунд
+				VectorCopy( target_origin, predicted_target );
+				VectorMA( predicted_target, prediction_time, ent->curstate.velocity, predicted_target );
+				VectorCopy( predicted_target, offset_origin );
+			}
+			else
+			{
+				// Prediction выключен или игрок не движется - используем текущую позицию
+				VectorCopy( target_origin, offset_origin );
+			}
+			
+			if( kek_aimbot_xyz.value )
+			{
+				offset_origin[0] += offset_x;
+				offset_origin[1] += offset_y;
+				offset_origin[2] += offset_z;
+			}
+		}
 		
-		// Check visibility
+		// Check visibility (проверяем видимость центра игрока для общего статуса)
 		is_visible = kek_IsPlayerVisible( ent );
 		
 		// If visible_only mode, skip invisible targets
@@ -2696,34 +3361,156 @@ static void kek_Aimbot( ref_viewpass_t *rvp )
 	
 	// Сбрасываем флаг psilent если нет цели (aimbot не активен)
 	// Это предотвращает применение старых углов когда aimbot выключен
-	if( !best_target && aimbot_psilent )
+	if( !best_target )
+	{
+		if( aimbot_psilent )
 	{
 		char reset_cmd[64];
 		Q_snprintf( reset_cmd, sizeof( reset_cmd ), "kek_internal_psilent_reset\n" );
 		gEngfuncs.Cbuf_InsertText( reset_cmd );
+		}
+		
+		// Reset anti-detection variables when no target
+		kek_aimbot_jitter_accumulator[0] = 0.0f;
+		kek_aimbot_jitter_accumulator[1] = 0.0f;
+		VectorClear( kek_aimbot_last_applied_angles );
 	}
 	
 	// Aim at best target
 	if( best_target && kek_GetPlayerPosition( best_target, target_origin ))
 	{
-		// Apply offset to target position
-		VectorCopy( target_origin, offset_origin );
-		offset_origin[0] += offset_x;
-		offset_origin[1] += offset_y;
-		offset_origin[2] += offset_z;
+		// МУЛЬТИПОИНТЫ: Если включен multipoint, используем лучшую видимую точку на теле
+		if( kek_aimbot_multipoint.value )
+		{
+			// Получаем лучшую видимую точку (голова > грудь > живот > ноги)
+			if( !kek_GetMultipointTarget( best_target, view_origin, offset_origin ))
+			{
+				// Fallback: используем обычный offset (если kek_aimbot_xyz включен)
+				VectorCopy( target_origin, offset_origin );
+				if( kek_aimbot_xyz.value )
+				{
+					offset_origin[0] += offset_x;
+					offset_origin[1] += offset_y;
+					offset_origin[2] += offset_z;
+				}
+			}
+			else
+			{
+				// Применяем дополнительный offset только если kek_aimbot_xyz включен
+				// Это позволяет использовать чистые мультипоинты без offset'ов
+				if( kek_aimbot_xyz.value )
+				{
+					offset_origin[0] += offset_x;
+					offset_origin[1] += offset_y;
+					offset_origin[2] += offset_z;
+				}
+			}
+		}
+		else
+		{
+			// Обычный режим: используем одну точку с offset (если kek_aimbot_xyz включен)
+			// PREDICTION для движущихся целей: предсказываем позицию с учетом velocity
+			vec3_t predicted_target;
+			
+			// Применяем prediction только если включен cvar
+			if( kek_aimbot_predict.value && !VectorIsNull( best_target->curstate.velocity ))
+			{
+				float prediction_time = 0.1f; // Предсказываем на 100мс вперед
+				
+				// Вычисляем расстояние до цели для более точного prediction
+				vec3_t dist_vec;
+				VectorSubtract( target_origin, view_origin, dist_vec );
+				float distance = VectorLength( dist_vec );
+				
+				// Учитываем время полета (для дальних дистанций prediction больше)
+				if( distance > 100.0f )
+				{
+					prediction_time = Q_min( distance / 10000.0f, 0.2f ); // Максимум 200мс
+				}
+				
+				// Предсказываем позицию игрока через prediction_time секунд
+				VectorCopy( target_origin, predicted_target );
+				VectorMA( predicted_target, prediction_time, best_target->curstate.velocity, predicted_target );
+				VectorCopy( predicted_target, offset_origin );
+			}
+			else
+			{
+				// Prediction выключен или игрок не движется - используем текущую позицию
+				VectorCopy( target_origin, offset_origin );
+			}
+			
+			if( kek_aimbot_xyz.value )
+			{
+				offset_origin[0] += offset_x;
+				offset_origin[1] += offset_y;
+				offset_origin[2] += offset_z;
+			}
+		}
 		
 		// Calculate target angles with offset
 		kek_CalculateAimAngles( view_origin, offset_origin, target_angles );
 		
 		// Apply smooth aim
+		vec3_t smooth_angles;
 		if( aimbot_smooth < 1.0f )
 		{
-			kek_SmoothAim( target_angles, view_angles, aimbot_smooth, aim_angles );
+			kek_SmoothAim( target_angles, view_angles, aimbot_smooth, smooth_angles );
 		}
 		else
 		{
-			VectorCopy( target_angles, aim_angles );
+			VectorCopy( target_angles, smooth_angles );
 		}
+		
+		// Apply anti-detection bypass for reaimdetector
+		if( kek_aimbot_bypass.value )
+		{
+			float bypass_humanize = bound( 0.0f, kek_aimbot_humanize.value, 2.0f );
+			float bypass_max_speed = kek_aimbot_max_speed.value;
+			float bypass_jitter = bound( 0.0f, kek_aimbot_jitter.value, 1.0f );
+			
+			// Step 1: Apply rate limiting to prevent instant locks
+			vec3_t rate_limited_angles;
+			if( bypass_max_speed > 0.0f )
+			{
+				// Use last applied angles for rate limiting (or current view angles if first frame)
+				vec3_t last_angles;
+				if( VectorIsNull( kek_aimbot_last_applied_angles ))
+				{
+					VectorCopy( view_angles, last_angles );
+				}
+				else
+				{
+					VectorCopy( kek_aimbot_last_applied_angles, last_angles );
+				}
+				
+				kek_RateLimitAim( smooth_angles, last_angles, bypass_max_speed, rate_limited_angles );
+				VectorCopy( rate_limited_angles, aim_angles );
+			}
+			else
+			{
+				VectorCopy( smooth_angles, aim_angles );
+			}
+			
+			// Step 2: Add humanization (random micro deviations)
+			if( bypass_humanize > 0.0f )
+			{
+				kek_HumanizeAim( aim_angles, bypass_humanize );
+			}
+			
+			// Step 3: Add micro jitter (continuous tiny movements)
+			if( bypass_jitter > 0.0f )
+			{
+				kek_AddMicroJitter( aim_angles, bypass_jitter );
+			}
+		}
+		else
+		{
+			// Bypass disabled - use smooth angles directly
+			VectorCopy( smooth_angles, aim_angles );
+		}
+		
+		// Store applied angles for rate limiting next frame
+		VectorCopy( aim_angles, kek_aimbot_last_applied_angles );
 		
 		// Check if using psilent mode
 		if( aimbot_psilent )
@@ -2972,33 +3759,6 @@ static void kek_ApplyAntiAim( ref_viewpass_t *rvp )
 		}
 		break;
 		
-	case 8: // Upside Down - flip player upside down (head to ground, feet up)
-		{
-			// Rotate 180 degrees around Y axis (yaw) to flip horizontal orientation
-			float upside_down_yaw = view_angles[YAW] + 180.0f;
-			
-			// Normalize yaw
-			while( upside_down_yaw > 180.0f ) upside_down_yaw -= 360.0f;
-			while( upside_down_yaw < -180.0f ) upside_down_yaw += 360.0f;
-			
-			// Completely invert pitch to flip player upside down
-			// Invert pitch: if looking forward (0°), flip to looking straight up (89°)
-			// Then add 180 to completely flip - player walks on head with feet up and head to ground
-			float upside_down_pitch = -view_angles[PITCH]; // Invert pitch
-			upside_down_pitch = 180.0f - upside_down_pitch; // Flip 180 degrees
-			
-			// Clamp to valid range (-89 to 89), but prefer maximum down angle for full upside down effect
-			if( upside_down_pitch > 89.0f ) upside_down_pitch = 89.0f;
-			if( upside_down_pitch < -89.0f ) upside_down_pitch = -89.0f;
-			
-			// Force maximum down angle for complete upside down effect (player looks at ground)
-			upside_down_pitch = -89.0f;
-			
-			view_angles[YAW] = upside_down_yaw;
-			view_angles[PITCH] = upside_down_pitch;
-		}
-		break;
-		
 	default:
 		// Default - jitter
 		{
@@ -3021,6 +3781,83 @@ static void kek_ApplyAntiAim( ref_viewpass_t *rvp )
 		view_angles[YAW] -= 360.0f;
 	while( view_angles[YAW] < -180.0f )
 		view_angles[YAW] += 360.0f;
+	
+	// ОБХОД SPINHACKDETECTOR: Ограничиваем скорость изменения углов до 1400 градусов/сек
+	// Работает только если включен kek_antiaim_bypass
+	// Если выключен - antiaim работает без ограничений
+	if( kek_antiaim_bypass.value )
+	{
+		// Spinhackdetector банит при >1500 градусов/сек, используем 1400 для безопасности
+		const float MAX_ANGLE_CHANGE_PER_SEC = 1400.0f; // Градусов в секунду (безопасно ниже лимита 1500)
+		
+		double current_time = gp_cl->time;
+		double delta_time = 0.0;
+		
+		// Сброс счетчика каждую секунду
+		if( current_time - kek_antiaim_last_reset_time >= 1.0 )
+		{
+			kek_antiaim_total_angle_change = 0.0f;
+			kek_antiaim_last_reset_time = current_time;
+		}
+		
+		// Вычисляем изменение углов относительно предыдущего кадра
+		if( kek_antiaim_last_frame_time > 0.0 )
+		{
+			delta_time = current_time - kek_antiaim_last_frame_time;
+			if( delta_time > 0.1 ) delta_time = 0.1; // Максимум 100ms между кадрами
+			if( delta_time < 0.001 ) delta_time = 0.001; // Минимум 1ms
+			
+			if( !VectorIsNull( kek_antiaim_last_angles ))
+			{
+				// Вычисляем изменение углов
+				vec3_t angle_delta;
+				angle_delta[0] = view_angles[0] - kek_antiaim_last_angles[0];
+				angle_delta[1] = view_angles[1] - kek_antiaim_last_angles[1];
+				angle_delta[2] = view_angles[2] - kek_antiaim_last_angles[2];
+				
+				// Нормализуем разницу углов
+				while( angle_delta[1] > 180.0f ) angle_delta[1] -= 360.0f;
+				while( angle_delta[1] < -180.0f ) angle_delta[1] += 360.0f;
+				while( angle_delta[0] > 180.0f ) angle_delta[0] -= 360.0f;
+				while( angle_delta[0] < -180.0f ) angle_delta[0] += 360.0f;
+				
+				// Вычисляем общее изменение (векторное расстояние)
+				float total_change = sqrtf( angle_delta[0] * angle_delta[0] + 
+				                            angle_delta[1] * angle_delta[1] + 
+				                            angle_delta[2] * angle_delta[2] );
+				
+				// Вычисляем изменение в градусах в секунду
+				float change_per_sec = total_change / (float)delta_time;
+				
+				// Добавляем к общему счетчику за секунду
+				kek_antiaim_total_angle_change += change_per_sec * (float)delta_time;
+				
+				// Если превышен лимит - ограничиваем изменение углов
+				if( kek_antiaim_total_angle_change > MAX_ANGLE_CHANGE_PER_SEC )
+				{
+					// Ограничиваем скорость изменения углов
+					float allowed_change = MAX_ANGLE_CHANGE_PER_SEC * (float)delta_time;
+					float scale = allowed_change / total_change;
+					if( scale < 1.0f )
+					{
+						// Применяем масштабирование к изменению углов
+						view_angles[0] = kek_antiaim_last_angles[0] + angle_delta[0] * scale;
+						view_angles[1] = kek_antiaim_last_angles[1] + angle_delta[1] * scale;
+						view_angles[2] = kek_antiaim_last_angles[2] + angle_delta[2] * scale;
+						
+						// Нормализуем снова
+						if( view_angles[PITCH] > 89.0f ) view_angles[PITCH] = 89.0f;
+						if( view_angles[PITCH] < -89.0f ) view_angles[PITCH] = -89.0f;
+						while( view_angles[YAW] > 180.0f ) view_angles[YAW] -= 360.0f;
+						while( view_angles[YAW] < -180.0f ) view_angles[YAW] += 360.0f;
+					}
+				}
+			}
+		}
+		
+		kek_antiaim_last_frame_time = current_time;
+		VectorCopy( view_angles, kek_antiaim_last_angles );
+	}
 	
 	// Apply antiaim angles via command (silent, like psilent)
 	// This modifies usercmd without changing visual view
@@ -3073,6 +3910,7 @@ void R_RenderScene( void )
 
 	// Draw ESP boxes for players
 	kek_DrawESP();
+	
 
 	// Draw aimbot FOV
 	kek_DrawAimbotFOV();

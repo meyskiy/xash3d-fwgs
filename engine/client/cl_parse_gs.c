@@ -500,6 +500,7 @@ static void CL_ParseSoundPacketGS( sizebuf_t *msg )
 	{
 		S_StartSound( pos, entnum, chan, handle, volume, attn, pitch, flags );
 	}
+	
 }
 
 static void CL_ParseSpawnStaticSound( sizebuf_t *msg )

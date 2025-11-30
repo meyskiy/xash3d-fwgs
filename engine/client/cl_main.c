@@ -720,6 +720,87 @@ static void CL_CreateCmd( void )
 		if( !cl.background ) pcmd->cmd.msec = 0;
 	}
 
+	// KEK RCS (Recoil Control System): компенсация отдачи
+	// Отслеживает изменения viewangles при стрельбе и компенсирует отдачу
+	static vec3_t kek_rcs_last_angles = { 0.0f, 0.0f, 0.0f };
+	static qboolean kek_rcs_initialized = false;
+	
+	float rcs_enabled = Cvar_VariableValue( "kek_rcs" );
+	if( rcs_enabled && cls.state >= ca_active && !cls.demoplayback && FBitSet( pcmd->cmd.buttons, IN_ATTACK ))
+	{
+		// Используем cl.viewangles (текущие углы от сервера) для отслеживания отдачи
+		vec3_t current_viewangles;
+		VectorCopy( cl.viewangles, current_viewangles );
+		
+		float rcs_strength = Cvar_VariableValue( "kek_rcs_strength" );
+		float rcs_smooth = Cvar_VariableValue( "kek_rcs_smooth" );
+		
+		if( rcs_strength < 0.0f ) rcs_strength = 0.0f;
+		if( rcs_strength > 2.0f ) rcs_strength = 2.0f;
+		if( rcs_smooth < 0.0f ) rcs_smooth = 0.0f;
+		if( rcs_smooth > 1.0f ) rcs_smooth = 1.0f;
+		
+		if( !kek_rcs_initialized )
+		{
+			// Первый кадр стрельбы - сохраняем начальные углы
+			VectorCopy( current_viewangles, kek_rcs_last_angles );
+			kek_rcs_initialized = true;
+		}
+		else
+		{
+			// Вычисляем изменение углов (отдача от сервера)
+			vec3_t angle_delta;
+			angle_delta[PITCH] = current_viewangles[PITCH] - kek_rcs_last_angles[PITCH];
+			angle_delta[YAW] = current_viewangles[YAW] - kek_rcs_last_angles[YAW];
+			angle_delta[ROLL] = current_viewangles[ROLL] - kek_rcs_last_angles[ROLL];
+			
+			// Нормализуем разницу углов
+			while( angle_delta[YAW] > 180.0f ) angle_delta[YAW] -= 360.0f;
+			while( angle_delta[YAW] < -180.0f ) angle_delta[YAW] += 360.0f;
+			
+			// Отдача обычно идет вверх (увеличивает pitch) и немного в стороны (yaw)
+			// Компенсируем изменения углов
+			if( fabs( angle_delta[PITCH] ) > 0.01f || fabs( angle_delta[YAW] ) > 0.01f )
+			{
+				// Вычисляем компенсацию (обратное смещение)
+				vec3_t compensation;
+				compensation[PITCH] = -angle_delta[PITCH] * rcs_strength;
+				compensation[YAW] = -angle_delta[YAW] * rcs_strength;
+				compensation[ROLL] = -angle_delta[ROLL] * rcs_strength;
+				
+				// Применяем сглаживание если нужно
+				if( rcs_smooth > 0.0f && rcs_smooth < 1.0f )
+				{
+					compensation[PITCH] *= (1.0f - rcs_smooth);
+					compensation[YAW] *= (1.0f - rcs_smooth);
+					compensation[ROLL] *= (1.0f - rcs_smooth);
+				}
+				
+				// Применяем компенсацию к углам команды
+				pcmd->cmd.viewangles[PITCH] += compensation[PITCH];
+				pcmd->cmd.viewangles[YAW] += compensation[YAW];
+				pcmd->cmd.viewangles[ROLL] += compensation[ROLL];
+				
+				// Ограничиваем pitch
+				if( pcmd->cmd.viewangles[PITCH] > 89.0f ) pcmd->cmd.viewangles[PITCH] = 89.0f;
+				if( pcmd->cmd.viewangles[PITCH] < -89.0f ) pcmd->cmd.viewangles[PITCH] = -89.0f;
+				
+				// Нормализуем yaw
+				while( pcmd->cmd.viewangles[YAW] > 180.0f ) pcmd->cmd.viewangles[YAW] -= 360.0f;
+				while( pcmd->cmd.viewangles[YAW] < -180.0f ) pcmd->cmd.viewangles[YAW] += 360.0f;
+			}
+			
+			// Обновляем last_angles для следующего кадра (используем компенсированные углы)
+			VectorCopy( pcmd->cmd.viewangles, kek_rcs_last_angles );
+		}
+	}
+	else if( !FBitSet( pcmd->cmd.buttons, IN_ATTACK ))
+	{
+		// Игрок прекратил стрельбу - сбрасываем RCS
+		kek_rcs_initialized = false;
+		VectorClear( kek_rcs_last_angles );
+	}
+	
 	// KEK psilent aimbot: if psilent angles were set via command, use them
 	// This makes aimbot invisible - camera doesn't turn, but bullets go to target
 	// (angles are set by renderer via kek_internal_psilent command)
@@ -728,20 +809,26 @@ static void CL_CreateCmd( void )
 	extern vec3_t kek_antiaim_angles;
 	extern qboolean kek_has_antiaim_target;
 	
-	// ИСПРАВЛЕНИЕ PSILENT: Применяем углы каждый кадр для стабильной работы
-	// Проблема была в том, что команды применялись не каждый кадр
+	// ИСПРАВЛЕНИЕ PSILENT: Применяем углы только при стрельбе, чтобы не влиять на движение
 	// KEK psilent aimbot: приоритет выше чем antiaim
-	// Если есть psilent углы, применяем их (aimbot активен)
-	if( kek_has_psilent_target )
+	// Если есть psilent углы И игрок стреляет, применяем их (aimbot активен)
+	// ВАЖНО: psilent углы НЕ применяются, если игрок не стреляет - это предотвращает влияние на движение
+	if( kek_has_psilent_target && FBitSet( pcmd->cmd.buttons, IN_ATTACK ))
 	{
+		// Сохраняем движение ДО изменения углов
+		float savedForward = pcmd->cmd.forwardmove;
+		float savedSide = pcmd->cmd.sidemove;
+		
 		// Apply psilent angles to usercmd (sent to server)
 		// But DON'T modify cl.viewangles (visual camera)
 		VectorCopy( kek_psilent_angles, pcmd->cmd.viewangles );
 		
-		// НЕ сбрасываем флаг - углы должны применяться каждый кадр пока есть цель
-		// Флаг будет сброшен когда aimbot перестанет отправлять команды
-		// kek_has_psilent_target = false; // УБРАНО для стабильной работы
+		// ВАЖНО: Восстанавливаем движение - движение не должно зависеть от psilent углов
+		// Psilent углы влияют только на направление выстрела, но не на движение
+		pcmd->cmd.forwardmove = savedForward;
+		pcmd->cmd.sidemove = savedSide;
 	}
+	// Если игрок не стреляет - НЕ применяем psilent углы вообще, чтобы не влиять на движение
 	// KEK antiaim: if antiaim angles were set via command, use them
 	// Antiaim works when not shooting/aiming (only when psilent is not active)
 	else if( kek_has_antiaim_target )
@@ -1037,6 +1124,42 @@ static void CL_SendCommand( void )
 {
 	int i;
 	int speed_multiplier = (int)Cvar_VariableValue( "ebash3d_speed_multiplier" );
+	
+	// KEK Rapidfire: автоматически включать спидхак при стрельбе/перезарядке
+	// Используем статическую переменную для отслеживания состояния между вызовами
+	static qboolean kek_rapidfire_last_shooting = false;
+	static qboolean kek_rapidfire_last_reloading = false;
+	
+	float rapidfire_enabled = Cvar_VariableValue( "kek_rapidfire" );
+	if( rapidfire_enabled && cls.state >= ca_active && !cls.demoplayback )
+	{
+		// Проверяем ПРЕДЫДУЩУЮ команду на наличие стрельбы или перезарядки
+		int last_cmd_idx = (cls.netchan.outgoing_sequence - 1) & CL_UPDATE_MASK;
+		runcmd_t *last_cmd = &cl.commands[last_cmd_idx];
+		
+		qboolean is_shooting = FBitSet( last_cmd->cmd.buttons, IN_ATTACK );
+		qboolean is_reloading = FBitSet( last_cmd->cmd.buttons, IN_RELOAD );
+		
+		// Если стреляем или перезаряжаемся - включаем спидхак
+		if( is_shooting || is_reloading || kek_rapidfire_last_shooting || kek_rapidfire_last_reloading )
+		{
+			float rapidfire_mult = Cvar_VariableValue( "kek_rapidfire_multiplier" );
+			if( rapidfire_mult < 1.0f ) rapidfire_mult = 1.0f;
+			if( rapidfire_mult > 20.0f ) rapidfire_mult = 20.0f; // Ограничиваем максимум
+			
+			// Используем rapidfire множитель вместо обычного
+			speed_multiplier = (int)rapidfire_mult;
+		}
+		
+		// Сохраняем состояние для следующего кадра
+		kek_rapidfire_last_shooting = is_shooting;
+		kek_rapidfire_last_reloading = is_reloading;
+	}
+	else
+	{
+		kek_rapidfire_last_shooting = false;
+		kek_rapidfire_last_reloading = false;
+	}
 
 	for( i = 0; i < speed_multiplier; i++ )
 	{
@@ -3860,9 +3983,6 @@ static void CL_InitLocal( void )
 	Cmd_AddCommand ("kek_internal_antiaim", CL_KEK_AntiAim_f, "internal antiaim angle setter" );
 	Cmd_AddCommand ("kek_internal_antiaim_reset", CL_KEK_AntiAim_Reset_f, "reset antiaim flag" );
 
-	// Cheat menu system
-	CheatMenu_Init();
-
 	Cmd_AddRestrictedCommand ("setinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of userinfo)" );
 	Cmd_AddRestrictedCommand ("userinfo", CL_SetInfo_f, "examine or change the userinfo string (alias of setinfo)" );
 	Cmd_AddCommand ("physinfo", CL_Physinfo_f, "print current client physinfo" );
@@ -4062,6 +4182,7 @@ void CL_Init( void )
 		Host_Error( "can't initialize %s: %s\n", libpath, COM_GetLibraryError( ));
 
 	ID_Init();
+	
 
 	cls.build_num = 0;
 	cls.initialized = true;
