@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 
-// Include engine headers after imgui to avoid conflictss
+// Include engine headers after imgui to avoid conflicts
 // const.h must be included first to define basic types (uint, word, byte, BIT, color24, colorVec, etc.)
 // cvardef.h must be included before ref_api.h to define cvar_t
 // vid_common.h must be included before common.h to define window_mode_e before platform.h uses it
@@ -46,12 +46,18 @@ extern "C" {
 #define glScissor pglScissor
 #define glBindTexture pglBindTexture
 #define glDrawElements pglDrawElements
-// GL_LIGHTING and GL_COLOR_MATERIAL may not be available on OpenGL ES, so we'll conditionally disable them
+// GL constants that may not be available on OpenGL ES
 #ifndef GL_LIGHTING
 #define GL_LIGHTING 0x0B50
 #endif
 #ifndef GL_COLOR_MATERIAL
 #define GL_COLOR_MATERIAL 0x0B57
+#endif
+#ifndef GL_VIEWPORT
+#define GL_VIEWPORT 0x0BA2
+#endif
+#ifndef GL_SHADE_MODEL
+#define GL_SHADE_MODEL 0x0B54
 #endif
 #else
 #if _WIN32

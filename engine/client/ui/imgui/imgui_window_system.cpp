@@ -36,27 +36,54 @@ static CImGuiCheatMenu g_CheatMenu;
 void CImGuiWindowSystem::Initialize()
 {
     LinkWindows();
+#if __ANDROID__
+    for (IImGuiWindow *window : *m_WindowList) {
+        window->Initialize();
+    }
+#else
     for (IImGuiWindow *window : m_WindowList) {
         window->Initialize();
     }
+#endif
 }
 
 void CImGuiWindowSystem::VidInitialize()
 {
+#if __ANDROID__
+    for (IImGuiWindow *window : *m_WindowList) {
+        window->VidInitialize();
+    }
+#else
     for (IImGuiWindow *window : m_WindowList) {
         window->VidInitialize();
     }
+#endif
 }
 
 void CImGuiWindowSystem::Terminate()
 {
+#if __ANDROID__
+    for (IImGuiWindow *window : *m_WindowList) {
+        window->Terminate();
+    }
+#else
     for (IImGuiWindow *window : m_WindowList) {
         window->Terminate();
     }
+#endif
 }
 
 void CImGuiWindowSystem::NewFrame()
 {
+#if __ANDROID__
+    for (IImGuiWindow *window : *m_WindowList)
+    {
+        window->Think();
+        if (window->Active()) {
+            window->Draw();
+        }
+    }
+#else
     for (IImGuiWindow *window : m_WindowList)
     {
         window->Think();
@@ -64,20 +91,63 @@ void CImGuiWindowSystem::NewFrame()
             window->Draw();
         }
     }
+#endif
 }
 
 void CImGuiWindowSystem::AddWindow(IImGuiWindow *window)
 {
+#if __ANDROID__
+    if (!m_WindowList) {
+        m_WindowList = new std::vector<IImGuiWindow*>();
+    }
+    m_WindowList->push_back(window);
+#else
     m_WindowList.push_back(window);
+#endif
 }
 
 CImGuiWindowSystem::CImGuiWindowSystem()
 {
+#if __ANDROID__
+    m_WindowList = new std::vector<IImGuiWindow*>();
+#else
     m_WindowList.clear();
+#endif
+}
+
+CImGuiWindowSystem::~CImGuiWindowSystem()
+{
+#if __ANDROID__
+    delete m_WindowList;
+    m_WindowList = nullptr;
+#endif
 }
 
 bool CImGuiWindowSystem::KeyInput(bool keyDown, int keyNumber, const char *bindName)
 {
+#if __ANDROID__
+    if (keyDown && keyNumber == K_INS)
+    {
+        for (IImGuiWindow *window : *m_WindowList)
+        {
+            bool handled = window->HandleKey(keyDown, keyNumber, bindName);
+            if (!handled) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    for (IImGuiWindow *window : *m_WindowList)
+    {
+        if (window->Active()) {
+            bool handled = window->HandleKey(keyDown, keyNumber, bindName);
+            if (!handled) {
+                return false;
+            }
+        }
+    }
+#else
     if (keyDown && keyNumber == K_INS)
     {
         for (IImGuiWindow *window : m_WindowList)
@@ -99,18 +169,27 @@ bool CImGuiWindowSystem::KeyInput(bool keyDown, int keyNumber, const char *bindN
             }
         }
     }
-    
+#endif
     return true;
 }
 
 bool CImGuiWindowSystem::CursorRequired()
 {
+#if __ANDROID__
+    for (IImGuiWindow *window : *m_WindowList)
+    {
+        if (window->Active() && window->CursorRequired()) {
+            return true;
+        }
+    }
+#else
     for (IImGuiWindow *window : m_WindowList)
     {
         if (window->Active() && window->CursorRequired()) {
             return true;
         }
     }
+#endif
     return false;
 }
 

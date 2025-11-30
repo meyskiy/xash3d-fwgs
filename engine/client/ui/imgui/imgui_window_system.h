@@ -1,13 +1,20 @@
 #pragma once
 #include "imgui_window.h"
 
-// On Android, prevent old STL from being included
+// Forward declaration to avoid including <vector> in header on Android
+// This prevents STL conflicts between old STL and new libc++
 #if __ANDROID__
+// Prevent old STL from being included
 #define _STL_PAIR_H
 #define _STL_UTILITY_H
 #define _STL_CONFIG_H
-#endif
+namespace std {
+    template<typename T, typename Alloc = void>
+    class vector;
+}
+#else
 #include <vector>
+#endif
 
 class CImGuiWindowSystem
 {
@@ -17,7 +24,7 @@ public:
 
 private:
     CImGuiWindowSystem();
-    ~CImGuiWindowSystem() {};
+    ~CImGuiWindowSystem();
     CImGuiWindowSystem(const CImGuiWindowSystem &) = delete;
     CImGuiWindowSystem &operator=(const CImGuiWindowSystem &) = delete;
 
@@ -29,6 +36,10 @@ private:
     bool KeyInput(bool keyDown, int keyNumber, const char *bindName);
     bool CursorRequired();
 
+#if __ANDROID__
+    std::vector<IImGuiWindow*> *m_WindowList;
+#else
     std::vector<IImGuiWindow*> m_WindowList;
+#endif
 };
 
