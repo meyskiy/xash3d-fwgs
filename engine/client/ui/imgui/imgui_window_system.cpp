@@ -1,19 +1,5 @@
 // Include C++ standard library headers FIRST, before any engine headers
-// This prevents conflicts between old STL and new libc++ on Android
-#if __ANDROID__
-// On Android, prevent old STL from being included by defining its guards BEFORE any includes
-// The old STL is in sources/cxx-stl/system/include and conflicts with new libc++
-#define _STL_PAIR_H
-#define _STL_UTILITY_H
-#define _STL_CONFIG_H
-// Explicitly include new libc++ headers first to establish the namespace
-#include <__config>
-#include <__utility/pair.h>
-// Now include vector which should use the new libc++ pair we just included
 #include <vector>
-#else
-#include <vector>
-#endif
 
 // Include imgui headers
 #include "imgui.h"
@@ -24,7 +10,7 @@
 // const.h must be included first to define basic types (uint, word, byte, BIT, color24, colorVec, etc.)
 // cvardef.h must be included before ref_api.h to define cvar_t
 // vid_common.h must be included before common.h to define window_mode_e before platform.h uses it
-// ref_api.h must be included before common.h to define enum types before platform.h uses theme
+// ref_api.h must be included before common.h to define enum types before platform.h uses them
 extern "C" {
 #include "const.h"
 #include "cvardef.h"

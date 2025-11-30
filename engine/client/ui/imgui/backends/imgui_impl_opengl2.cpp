@@ -69,6 +69,45 @@
 #if defined(__APPLE__)
 #define GL_SILENCE_DEPRECATION
 #include <OpenGL/gl.h>
+#elif defined(__ANDROID__)
+#include "gl_export.h"
+// On Android, OpenGL functions are loaded dynamically, so we need to use function pointers with 'p' prefix
+// Create macros to map standard OpenGL function names to Android function pointers
+#define glEnable pglEnable
+#define glDisable pglDisable
+#define glBlendFunc pglBlendFunc
+#define glEnableClientState pglEnableClientState
+#define glDisableClientState pglDisableClientState
+#define glPolygonMode pglPolygonMode
+#define glShadeModel pglShadeModel
+#define glTexEnvi pglTexEnvi
+#define glViewport pglViewport
+#define glMatrixMode pglMatrixMode
+#define glPushMatrix pglPushMatrix
+#define glPopMatrix pglPopMatrix
+#define glLoadIdentity pglLoadIdentity
+#define glOrtho pglOrtho
+#define glGetIntegerv pglGetIntegerv
+#define glGetTexEnviv pglGetTexEnviv
+#define glPushAttrib pglPushAttrib
+#define glPopAttrib pglPopAttrib
+#define glVertexPointer pglVertexPointer
+#define glTexCoordPointer pglTexCoordPointer
+#define glColorPointer pglColorPointer
+#define glScissor pglScissor
+#define glBindTexture pglBindTexture
+#define glDrawElements pglDrawElements
+#define glGetError pglGetError
+#define glTexParameteri pglTexParameteri
+#define glTexImage2D pglTexImage2D
+#define glTexSubImage2D pglTexSubImage2D
+// GL_LIGHTING and GL_COLOR_MATERIAL may not be available on OpenGL ES, so we'll conditionally disable them
+#ifndef GL_LIGHTING
+#define GL_LIGHTING 0x0B50
+#endif
+#ifndef GL_COLOR_MATERIAL
+#define GL_COLOR_MATERIAL 0x0B57
+#endif
 #else
 #include <GL/gl.h>
 #endif
