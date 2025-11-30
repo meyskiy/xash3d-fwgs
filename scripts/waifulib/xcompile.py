@@ -330,7 +330,11 @@ class Android:
 					'-isystem', '%s/usr/include/' % (self.sysroot())
 				]
 
-		cflags += ['-I%s' % (self.system_stl())]
+		# For C++ files, don't add old STL to include paths to prevent conflicts with new libc++
+		# The new libc++ in sysroot/usr/include/c++/v1 should be used instead
+		# For C files, we still need the old STL for compatibility
+		if not cxx:
+			cflags += ['-I%s' % (self.system_stl())]
 		if not self.is_clang():
 			cflags += ['-DANDROID', '-D__ANDROID__']
 
