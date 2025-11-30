@@ -1425,12 +1425,17 @@ kek_IsPointVisible
 Check if a specific point on player body is visible (not behind wall)
 ================
 */
-static qboolean kek_IsPointVisible( vec3_t view_origin, vec3_t target_point )
+static qboolean kek_IsPointVisible( const vec3_t view_origin, const vec3_t target_point )
 {
 	pmtrace_t trace;
+	vec3_t view_origin_copy, target_point_copy;
+	
+	// Create local copies to avoid const issues with CL_TraceLine
+	VectorCopy( view_origin, view_origin_copy );
+	VectorCopy( target_point, target_point_copy );
 	
 	// Trace line from view to target point
-	trace = gEngfuncs.CL_TraceLine( view_origin, target_point, PM_STUDIO_BOX );
+	trace = gEngfuncs.CL_TraceLine( view_origin_copy, target_point_copy, PM_STUDIO_BOX );
 	
 	// If trace hit something, point is behind wall
 	return (trace.fraction >= 1.0f);
