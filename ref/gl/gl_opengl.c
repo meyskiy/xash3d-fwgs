@@ -5,33 +5,7 @@
 #include "gl4es/include/gl4eshint.h"
 #endif // XASH_GL4ES
 
-// Define OpenGL function pointers on Android when using dynamic loading
-#if !XASH_GL_STATIC && __ANDROID__
-// Define the function pointers that are declared as extern in gl_export.h
-GLenum (APIENTRY *pglGetError)(void);
-const GLubyte *(APIENTRY *pglGetString)(GLenum name);
-const GLubyte *(APIENTRY *pglGetStringi)(GLenum name, GLint i);
-void (APIENTRY *pglAccum)(GLenum op, GLfloat value);
-void (APIENTRY *pglAlphaFunc)(GLenum func, GLclampf ref);
-void (APIENTRY *pglArrayElement)(GLint i);
-void (APIENTRY *pglBegin)(GLenum mode);
-void (APIENTRY *pglBindTexture)(GLenum target, GLuint texture);
-void (APIENTRY *pglBitmap)(GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte *bitmap);
-void (APIENTRY *pglBlendFunc)(GLenum sfactor, GLenum dfactor);
-void (APIENTRY *pglCallList)(GLuint list);
-void (APIENTRY *pglCallLists)(GLsizei n, GLenum type, const GLvoid *lists);
-void (APIENTRY *pglClear)(GLbitfield mask);
-void (APIENTRY *pglClearAccum)(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
-void (APIENTRY *pglClearColor)(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
-void (APIENTRY *pglClearDepth)(GLclampd depth);
-void (APIENTRY *pglClearIndex)(GLfloat c);
-void (APIENTRY *pglClearStencil)(GLint s);
-GLboolean (APIENTRY *pglIsEnabled)(GLenum cap);
-GLboolean (APIENTRY *pglIsList)(GLuint list);
-GLboolean (APIENTRY *pglIsTexture)(GLuint texture);
-void (APIENTRY *pglClipPlane)(GLenum plane, const GLdouble *equation);
-void (APIENTRY *pglColor3b)(GLbyte red, GLbyte green, GLbyte blue);
-void (APIENTRY *pglColor3bv)(const GLbyte *v);
+CVAR_DEFINE( gl_extensions, "gl_allow_extensions", "1", FCVAR_GLCONFIG|FCVAR_READ_ONLY, "allow gl_extensions" );
 void (APIENTRY *pglColor3d)(GLdouble red, GLdouble green, GLdouble blue);
 void (APIENTRY *pglColor3dv)(const GLdouble *v);
 void (APIENTRY *pglColor3f)(GLfloat red, GLfloat green, GLfloat blue);
@@ -130,8 +104,6 @@ void (APIENTRY *pglGetPixelMapuiv)(GLenum map, GLuint *values);
 void (APIENTRY *pglGetPixelMapusv)(GLenum map, GLushort *values);
 void (APIENTRY *pglGetPointerv)(GLenum pname, GLvoid **params);
 void (APIENTRY *pglGetPolygonStipple)(GLubyte *mask);
-const GLubyte *(APIENTRY *pglGetString)(GLenum name);
-const GLubyte *(APIENTRY *pglGetStringi)(GLenum name, GLint i);
 void (APIENTRY *pglGetTexEnvfv)(GLenum target, GLenum pname, GLfloat *params);
 void (APIENTRY *pglGetTexEnviv)(GLenum target, GLenum pname, GLint *params);
 void (APIENTRY *pglGetTexGendv)(GLenum coord, GLenum pname, GLdouble *params);
@@ -343,15 +315,6 @@ void (APIENTRY *pglVertex3sv)(const GLshort *v);
 void (APIENTRY *pglVertex4d)(GLdouble x, GLdouble y, GLdouble z, GLdouble w);
 void (APIENTRY *pglVertex4dv)(const GLdouble *v);
 void (APIENTRY *pglVertex4f)(GLfloat x, GLfloat y, GLfloat z, GLfloat w);
-void (APIENTRY *pglVertex4fv)(const GLfloat *v);
-void (APIENTRY *pglVertex4i)(GLint x, GLint y, GLint z, GLint w);
-void (APIENTRY *pglVertex4iv)(const GLint *v);
-void (APIENTRY *pglVertex4s)(GLshort x, GLshort y, GLshort z, GLshort w);
-void (APIENTRY *pglVertex4sv)(const GLshort *v);
-void (APIENTRY *pglVertexPointer)(GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
-void (APIENTRY *pglViewport)(GLint x, GLint y, GLsizei width, GLsizei height);
-#endif
-
 CVAR_DEFINE( gl_extensions, "gl_allow_extensions", "1", FCVAR_GLCONFIG|FCVAR_READ_ONLY, "allow gl_extensions" );
 CVAR_DEFINE( gl_texture_anisotropy, "gl_anisotropy", "8", FCVAR_GLCONFIG, "textures anisotropic filter" );
 CVAR_DEFINE_AUTO( gl_texture_lodbias, "0.0", FCVAR_GLCONFIG, "LOD bias for mipmapped textures (perfomance|quality)" );
