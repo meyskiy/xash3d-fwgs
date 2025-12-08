@@ -160,13 +160,6 @@ void R_StudioInit( void )
 	m_fDoRemap = false;
 }
 
-/*
-================
-R_StudioSetupTimings
-
-init current time for a given model
-================
-*/
 static void R_StudioSetupTimings( void )
 {
 	if( RI.drawWorld )
@@ -446,7 +439,7 @@ R_GetChromeSprite
 
 ===============
 */
-static model_t *R_GetChromeSprite( void )
+model_t *R_GetChromeSprite( void )
 {
 	return gEngfuncs.GetDefaultSprite( REF_CHROME_SPRITE );
 }
@@ -586,7 +579,7 @@ StudioSetUpTransform
 
 ====================
 */
-static void R_StudioSetUpTransform( cl_entity_t *e )
+void R_StudioSetUpTransform( cl_entity_t *e )
 {
 	vec3_t	origin, angles;
 
@@ -830,7 +823,7 @@ StudioMergeBones
 
 ====================
 */
-static void R_StudioMergeBones( cl_entity_t *e, model_t *m_pSubModel )
+void R_StudioMergeBones( cl_entity_t *e, model_t *m_pSubModel )
 {
 	int		i, j;
 	mstudiobone_t	*pbones;
@@ -890,7 +883,7 @@ StudioSetupBones
 
 ====================
 */
-static void R_StudioSetupBones( cl_entity_t *e )
+void R_StudioSetupBones( cl_entity_t *e )
 {
 	float		f;
 	mstudiobone_t	*pbones;
@@ -1047,7 +1040,7 @@ StudioSaveBones
 
 ====================
 */
-static void R_StudioSaveBones( void )
+void R_StudioSaveBones( void )
 {
 	mstudiobone_t	*pbones;
 	int		i;
@@ -1317,7 +1310,7 @@ R_StudioDynamicLight
 
 ===============
 */
-static void R_StudioDynamicLight( cl_entity_t *ent, alight_t *plight )
+void R_StudioDynamicLight( cl_entity_t *ent, alight_t *plight )
 {
 	movevars_t	*mv = tr.movevars;
 	vec3_t		lightDir, vecSrc, vecEnd;
@@ -1508,7 +1501,7 @@ pfnStudioEntityLight
 
 ===============
 */
-static void R_StudioEntityLight( alight_t *lightinfo )
+void R_StudioEntityLight( alight_t *lightinfo )
 {
 	int		lnum, i, j, k;
 	float		minstrength, dist2, f, r2;
@@ -1589,7 +1582,7 @@ R_StudioSetupLighting
 
 ===============
 */
-static void R_StudioSetupLighting( alight_t *plight )
+void R_StudioSetupLighting( alight_t *plight )
 {
 	float	scale = 1.0f;
 	int	i;
@@ -2233,7 +2226,7 @@ R_StudioDrawPoints
 
 ===============
 */
-static void R_StudioDrawPoints( void )
+void R_StudioDrawPoints( void )
 {
 	int		i, j, k, m_skinnum;
 	float		shellscale = 0.0f;
@@ -2632,7 +2625,7 @@ R_StudioSetRemapColors
 
 ===============
 */
-static void R_StudioSetRemapColors( int newTop, int newBottom )
+void R_StudioSetRemapColors( int newTop, int newBottom )
 {
 	if( gEngfuncs.CL_EntitySetRemapColors( RI.currententity, RI.currentmodel, newTop, newBottom ))
 		m_fDoRemap = true;
@@ -2825,7 +2818,7 @@ R_StudioSetForceFaceFlags
 
 ===============
 */
-static void R_StudioSetForceFaceFlags( int flags )
+void R_StudioSetForceFaceFlags( int flags )
 {
 	g_nForceFaceFlags = flags;
 }
@@ -2836,7 +2829,7 @@ pfnStudioSetHeader
 
 ===============
 */
-static void R_StudioSetHeader( studiohdr_t *pheader )
+void R_StudioSetHeader( studiohdr_t *pheader )
 {
 	m_pStudioHeader = pheader;
 	m_fDoRemap = false;
@@ -2922,7 +2915,7 @@ R_StudioSetChromeOrigin
 
 ===============
 */
-static void R_StudioSetChromeOrigin( void )
+void R_StudioSetChromeOrigin( void )
 {
 	VectorCopy( RI.vieworg, g_studio.chrome_origin );
 }
@@ -3077,7 +3070,7 @@ StudioRenderFinal
 
 ====================
 */
-static void R_StudioRenderFinal( void )
+void R_StudioRenderFinal( void )
 {
 	int	i, rendermode;
 
@@ -3469,7 +3462,7 @@ R_StudioDrawModel
 
 ===============
 */
-static int R_StudioDrawModel( int flags )
+int R_StudioDrawModel( int flags )
 {
 	alight_t	lighting;
 	vec3_t	dir;
@@ -3714,31 +3707,6 @@ void R_DrawViewModel( void )
 	if( !R_ModelOpaque( view->curstate.rendermode ) && tr.blend <= 0.0f )
 		return; // invisible ?
 
-	// Kek viewmodel glow - use eBash3D approach
-	extern cvar_t kek_viewmodel_glow;
-	extern cvar_t kek_viewmodel_glow_r;
-	extern cvar_t kek_viewmodel_glow_g;
-	extern cvar_t kek_viewmodel_glow_b;
-	extern cvar_t kek_viewmodel_glow_alpha;
-
-	if( kek_viewmodel_glow.value > 0.0f )
-	{
-		// Calculate glow brightness and thickness from alpha (0-255 range)
-		float glowAlpha = kek_viewmodel_glow_alpha.value / 255.0f;
-		float glowBrightness = glowAlpha; // Brightness scales with alpha
-
-		// Thickness also scales with alpha - higher alpha = thicker glow
-		float glowThickness = 4.0f + (glowAlpha * 12.0f); // Range: 4-16 units
-
-		// Apply glow effect using kRenderNormal + kRenderFxGlowShell
-		view->curstate.rendermode = kRenderNormal;
-		view->curstate.renderfx = kRenderFxGlowShell;
-		view->curstate.rendercolor.r = (byte)(kek_viewmodel_glow_r.value * glowBrightness);
-		view->curstate.rendercolor.g = (byte)(kek_viewmodel_glow_g.value * glowBrightness);
-		view->curstate.rendercolor.b = (byte)(kek_viewmodel_glow_b.value * glowBrightness);
-		view->curstate.renderamt = (byte)glowThickness; // Controls glow shell thickness
-	}
-
 	RI.currententity = view;
 
 	if( !RI.currententity->model )
@@ -3761,50 +3729,6 @@ void R_DrawViewModel( void )
 
 	// restore depth range
 	pglDepthRange( gldepthmin, gldepthmax );
-}
-
-/*
-====================
-kek_RenderViewModelGlow
-
-Render viewmodel glow effect
-====================
-*/
-void kek_RenderViewModelGlow( void )
-{
-	cl_entity_t *view = tr.viewent;
-
-	if( !view || !view->model )
-		return;
-
-	// Simple glow test - render viewmodel again with different color
-	RI.currententity = view;
-	RI.currentmodel = view->model;
-
-	// Setup glow state
-	pglEnable( GL_BLEND );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE ); // Additive blending
-	pglDisable( GL_DEPTH_TEST );
-	pglDepthMask( GL_FALSE );
-	pglColor4f( 1.0f, 0.5f, 0.0f, 0.6f ); // Orange glow color
-
-	// Render the same model again
-	switch( view->model->type )
-	{
-	case mod_alias:
-		R_DrawAliasModel( view );
-		break;
-	case mod_studio:
-		if( pStudioDraw && pStudioDraw->StudioDrawModel )
-			pStudioDraw->StudioDrawModel( STUDIO_RENDER );
-		break;
-	}
-
-	// Restore state
-	pglDisable( GL_BLEND );
-	pglEnable( GL_DEPTH_TEST );
-	pglDepthMask( GL_TRUE );
-	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 }
 
 /*

@@ -93,6 +93,7 @@ static CVAR_DEFINE_AUTO( net_showdrop, "0", 0, "show packets that are dropped" )
 static CVAR_DEFINE_AUTO( net_qport, "0", FCVAR_READ_ONLY, "current quake netport" );
 CVAR_DEFINE_AUTO( net_send_debug, "0", FCVAR_PRIVILEGED, "enable debugging output for outgoing messages" );
 CVAR_DEFINE_AUTO( net_recv_debug, "0", FCVAR_PRIVILEGED, "enable debugging output for incoming messages" );
+CVAR_DEFINE_AUTO( kek_logs, "0", FCVAR_PRIVILEGED, "log all incoming and outgoing packets in hex format" );
 
 int	net_drop;
 netadr_t	net_from;
@@ -269,6 +270,12 @@ void Netchan_Init( void )
 	Cvar_RegisterVariable( &net_qport );
 	Cvar_RegisterVariable( &net_send_debug );
 	Cvar_RegisterVariable( &net_recv_debug );
+	Cvar_RegisterVariable( &kek_logs );
+	if( kek_logs.value )
+	{
+		Cvar_Set( "net_send_debug", "1" );
+		Cvar_Set( "net_recv_debug", "1" );
+	}
 	Cvar_FullSet( net_qport.name, buf, net_qport.flags );
 
 	net_mempool = Mem_AllocPool( "Network Pool" );

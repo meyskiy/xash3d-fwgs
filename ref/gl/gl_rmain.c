@@ -21,6 +21,7 @@ GNU General Public License for more details.
 #include "entity_types.h"
 #include "pmtrace.h"
 #include "pm_defs.h"
+#include "r_studioint.h"
 
 // Sound tracking structures and declarations
 
@@ -104,9 +105,33 @@ extern cvar_t kek_viewmodel_glow_g;
 extern cvar_t kek_viewmodel_glow_b;
 extern cvar_t kek_viewmodel_glow_alpha;
 
+extern cvar_t kek_player_glow;
+extern cvar_t kek_player_glow_alpha;
+
+// External from gl_studio.c
+extern int R_StudioDrawModel( int flags );
+extern void R_StudioDrawPoints( void );
+
+// Studio system functions for glow rendering
+extern void R_StudioSetHeader( studiohdr_t *header );
+extern void R_StudioSetUpTransform( cl_entity_t *e );
+extern void R_StudioMergeBones( cl_entity_t *e, model_t *m );
+extern void R_StudioSetupBones( cl_entity_t *e );
+extern void R_StudioSaveBones( void );
+extern void R_StudioDynamicLight( cl_entity_t *ent, alight_t *plight );
+extern void R_StudioEntityLight( alight_t *plight );
+extern void R_StudioSetupLighting( alight_t *plight );
+extern void R_StudioSetRemapColors( int top, int bottom );
+extern void R_StudioSetChromeOrigin( void );
+extern void R_StudioSetForceFaceFlags( int flags );
+extern model_t *R_GetChromeSprite( void );
+extern void R_StudioRenderFinal( void );
 
 // Function prototypes
-void kek_RenderViewModelGlow( void );
+extern void kek_RenderViewModelGlow( void );
+extern void kek_RenderPlayerGlow( cl_entity_t *ent );
+extern void kek_RenderPlayerGlowOnly( cl_entity_t *ent );
+extern void kek_RenderAllPlayerGlows( void );
 static void kek_ApplyAntiAim( ref_viewpass_t *rvp );
 
 static qboolean kek_UserinfoValueForKey( const char *userinfo, const char *key, char *out, size_t out_size )
@@ -1289,6 +1314,12 @@ static void R_DrawEntitiesOnList( void )
 
 	if( !RI.onlyClientDraw )
 	{
+		// Kek player glow effects - render after all entities but before viewmodel
+		if( kek_player_glow.value > 0.0f )
+		{
+			kek_RenderAllPlayerGlows();
+		}
+
 		// Kek custom FOV for viewmodel (arms distancing)
 		float original_projection[16];
 		float original_fov_x = RI.fov_x;
@@ -1435,7 +1466,7 @@ static qboolean kek_IsPointVisible( const vec3_t view_origin, const vec3_t targe
 	VectorCopy( target_point, target_point_copy );
 	
 	// Trace line from view to target point
-	trace = gEngfuncs.CL_TraceLine( view_origin_copy, target_point_copy, PM_STUDIO_BOX );
+	trace = gEngfuncs.CL_TraceLine( view_origin_copy, target_point_copy, PM_WORLD_ONLY );
 	
 	// If trace hit something, point is behind wall
 	return (trace.fraction >= 1.0f);
@@ -2126,14 +2157,35 @@ static void kek_DrawESPBox( cl_entity_t *ent, qboolean is_visible )
 	// Draw filled box if enabled
 	if( kek_esp_filled_box.value )
 	{
-		byte fill_r = (byte)bound( 0, kek_esp_filled_box_r.value, 255 );
-		byte fill_g = (byte)bound( 0, kek_esp_filled_box_g.value, 255 );
-		byte fill_b = (byte)bound( 0, kek_esp_filled_box_b.value, 255 );
+		byte fill_r, fill_g, fill_b;
+		
+		// Use different colors based on visibility
+		if( is_visible )
+		{
+			// Visible players - red
+			fill_r = 255;
+			fill_g = 0;
+			fill_b = 0;
+		}
+		else
+		{
+			// Players behind wall - green
+			fill_r = 0;
+			fill_g = 255;
+			fill_b = 0;
+		}
+		
 		byte fill_a = (byte)bound( 0, kek_esp_filled_box_alpha.value, 255 );
 		
 		// Draw filled rectangle behind the corner box
 		CL_FillRGBA( kRenderTransTexture, (float)x, (float)y, (float)width, (float)height, fill_r, fill_g, fill_b, fill_a );
 	}
+
+	// Render player glow effect - now handled in main rendering loop
+	// if( kek_player_glow.value > 0.0f )
+	// {
+	// 	kek_RenderPlayerGlow( ent );
+	// }
 
 	// Draw corner box using pixel-perfect rendering (CL_FillRGBA with kRenderTransTexture)
 	// Note: R_Set2DMode is called in kek_DrawESP before drawing all ESP elements
@@ -4296,4 +4348,289 @@ int CL_FxBlend( cl_entity_t *e )
 	blend = bound( 0, blend, 255 );
 
 	return blend;
+}
+
+/*
+====================
+kek_RenderAllPlayerGlows
+
+Render glow effects for all visible players
+====================
+*/
+void kek_RenderAllPlayerGlows( void )
+{
+	int i;
+	cl_entity_t *ent;
+
+	// Iterate through all entities to find players
+	for( i = 1; i < tr.max_entities; i++ )
+	{
+		ent = CL_GetEntityByIndex( i );
+		if( !ent || !ent->player || !ent->model || ent->model->type != mod_studio )
+			continue;
+
+		// Skip dead players
+		if( !kek_IsPlayerAlive( ent ) )
+			continue;
+
+		// Skip local player to avoid visual artifacts
+		if( RP_LOCALCLIENT( ent ) )
+			continue;
+
+		// Skip teammates if deathmatch mode is off
+		if( !kek_aimbot_dm.value && kek_IsSameTeam( ent ) )
+			continue;
+
+		// Render glow for this player (visibility check is inside the function)
+		kek_RenderPlayerGlowOnly( ent );
+	}
+}
+void kek_RenderViewModelGlow( void )
+{
+	cl_entity_t *view = tr.viewent;
+	
+	if( !view || !view->model )
+		return;
+
+	// Select color based on kek_viewmodel_glow value
+	int color_index = (int)kek_viewmodel_glow.value;
+	if( color_index <= 0 || color_index > 20 )
+		return; // No glow selected
+
+	// Temporarily set glow shell effect with custom color
+	int saved_renderfx = view->curstate.renderfx;
+	int saved_renderamt = view->curstate.renderamt;
+	color24 saved_rendercolor = view->curstate.rendercolor;
+
+	// Set glow shell effect
+	view->curstate.renderfx = kRenderFxGlowShell;
+	view->curstate.renderamt = (int)(kek_viewmodel_glow_alpha.value * 255.0f / 100.0f); // Convert to 0-255 range
+
+	// Set glow color based on selection
+	switch( color_index )
+	{
+	case 1: view->curstate.rendercolor.r = 255; view->curstate.rendercolor.g = 0; view->curstate.rendercolor.b = 0; break; // Красный
+	case 2: view->curstate.rendercolor.r = 0; view->curstate.rendercolor.g = 255; view->curstate.rendercolor.b = 0; break; // Зеленый
+	case 3: view->curstate.rendercolor.r = 0; view->curstate.rendercolor.g = 0; view->curstate.rendercolor.b = 255; break; // Синий
+	case 4: view->curstate.rendercolor.r = 255; view->curstate.rendercolor.g = 255; view->curstate.rendercolor.b = 0; break; // Желтый
+	case 5: view->curstate.rendercolor.r = 255; view->curstate.rendercolor.g = 0; view->curstate.rendercolor.b = 255; break; // Фиолетовый
+	case 6: view->curstate.rendercolor.r = 0; view->curstate.rendercolor.g = 255; view->curstate.rendercolor.b = 255; break; // Голубой
+	case 7: view->curstate.rendercolor.r = 255; view->curstate.rendercolor.g = 128; view->curstate.rendercolor.b = 0; break; // Оранжевый
+	case 8: view->curstate.rendercolor.r = 128; view->curstate.rendercolor.g = 128; view->curstate.rendercolor.b = 128; break; // Серый
+	case 9: view->curstate.rendercolor.r = 255; view->curstate.rendercolor.g = 255; view->curstate.rendercolor.b = 255; break; // Белый
+	case 10: view->curstate.rendercolor.r = 0; view->curstate.rendercolor.g = 0; view->curstate.rendercolor.b = 0; break; // Черный
+	case 11: view->curstate.rendercolor.r = 255; view->curstate.rendercolor.g = 192; view->curstate.rendercolor.b = 203; break; // Розовый
+	case 12: view->curstate.rendercolor.r = 150; view->curstate.rendercolor.g = 100; view->curstate.rendercolor.b = 50; break; // Коричневый
+	case 13: view->curstate.rendercolor.r = 128; view->curstate.rendercolor.g = 0; view->curstate.rendercolor.b = 128; break; // Пурпурный
+	case 14: view->curstate.rendercolor.r = 0; view->curstate.rendercolor.g = 128; view->curstate.rendercolor.b = 0; break; // Темно-зеленый
+	case 15: view->curstate.rendercolor.r = 128; view->curstate.rendercolor.g = 128; view->curstate.rendercolor.b = 0; break; // Оливковый
+	case 16: view->curstate.rendercolor.r = 0; view->curstate.rendercolor.g = 128; view->curstate.rendercolor.b = 128; break; // Бирюзовый
+	case 17: view->curstate.rendercolor.r = 128; view->curstate.rendercolor.g = 0; view->curstate.rendercolor.b = 0; break; // Темно-красный
+	case 18: view->curstate.rendercolor.r = 0; view->curstate.rendercolor.g = 0; view->curstate.rendercolor.b = 128; break; // Темно-синий
+	case 19: view->curstate.rendercolor.r = 204; view->curstate.rendercolor.g = 204; view->curstate.rendercolor.b = 153; break; // Кремовый
+	case 20: view->curstate.rendercolor.r = 76; view->curstate.rendercolor.g = 76; view->curstate.rendercolor.b = 76; break; // Темно-серый
+	}
+
+	// Render with glow shell effect
+	RI.currententity = view;
+	RI.currentmodel = view->model;
+	R_StudioDrawModel( STUDIO_RENDER );
+
+	// Restore original render state
+	view->curstate.renderfx = saved_renderfx;
+	view->curstate.renderamt = saved_renderamt;
+	view->curstate.rendercolor = saved_rendercolor;
+}
+
+/*
+====================
+kek_RenderPlayerGlowOnly
+
+Render only the glow shell effect for a player without rendering the normal model
+====================
+*/
+void kek_RenderPlayerGlowOnly( cl_entity_t *ent )
+{
+	if( !ent || !ent->model )
+		return;
+
+	// Don't render glow for local player to avoid visual artifacts
+	if( RP_LOCALCLIENT( ent ) )
+		return;
+
+	// Select color based on kek_player_glow value
+	int color_index = (int)kek_player_glow.value;
+	if( color_index <= 0 || color_index > 20 )
+		return; // No glow selected
+
+	// Save current render state
+	cl_entity_t *saved_currententity = RI.currententity;
+	model_t *saved_currentmodel = RI.currentmodel;
+
+	// Set up entity and model for glow rendering
+	RI.currententity = ent;
+	RI.currentmodel = ent->model;
+
+	// Save original render state
+	int saved_renderfx = ent->curstate.renderfx;
+	int saved_renderamt = ent->curstate.renderamt;
+	color24 saved_rendercolor = ent->curstate.rendercolor;
+
+	// Set glow shell effect
+	ent->curstate.renderfx = kRenderFxGlowShell;
+	ent->curstate.renderamt = (int)(kek_player_glow_alpha.value * 255.0f / 100.0f);
+
+	// Set glow color based on selection
+	switch( color_index )
+	{
+	case 1: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 0; break; // Красный
+	case 2: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 0; break; // Зеленый
+	case 3: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 255; break; // Синий
+	case 4: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 0; break; // Желтый
+	case 5: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 255; break; // Фиолетовый
+	case 6: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 255; break; // Голубой
+	case 7: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 0; break; // Оранжевый
+	case 8: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 128; break; // Серый
+	case 9: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 255; break; // Белый
+	case 10: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 0; break; // Черный
+	case 11: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 192; ent->curstate.rendercolor.b = 203; break; // Розовый
+	case 12: ent->curstate.rendercolor.r = 150; ent->curstate.rendercolor.g = 100; ent->curstate.rendercolor.b = 50; break; // Коричневый
+	case 13: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 128; break; // Пурпурный
+	case 14: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 0; break; // Темно-зеленый
+	case 15: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 0; break; // Оливковый
+	case 16: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 128; break; // Бирюзовый
+	case 17: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 0; break; // Темно-красный
+	case 18: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 128; break; // Темно-синий
+	case 19: ent->curstate.rendercolor.r = 204; ent->curstate.rendercolor.g = 204; ent->curstate.rendercolor.b = 153; break; // Кремовый
+	case 20: ent->curstate.rendercolor.r = 76; ent->curstate.rendercolor.g = 76; ent->curstate.rendercolor.b = 76; break; // Темно-серый
+	}
+
+	// Render ONLY the glow part - skip the normal render
+	// We need to set up the studio system properly first
+	R_StudioSetHeader((studiohdr_t *)gEngfuncs.Mod_Extradata( mod_studio, RI.currentmodel ));
+	R_StudioSetUpTransform( RI.currententity );
+
+	if( RI.currententity->curstate.movetype == MOVETYPE_FOLLOW )
+		R_StudioMergeBones( RI.currententity, RI.currentmodel );
+	else R_StudioSetupBones( RI.currententity );
+
+	R_StudioSaveBones();
+
+	// Set up lighting for glow
+	alight_t lighting;
+	vec3_t dir;
+	lighting.plightvec = dir;
+	R_StudioDynamicLight( RI.currententity, &lighting );
+	R_StudioEntityLight( &lighting );
+	R_StudioSetupLighting( &lighting );
+
+	// Set remap colors
+	int g_nTopColor = RI.currententity->curstate.colormap & 0xFF;
+	int g_nBottomColor = (RI.currententity->curstate.colormap & 0xFF00) >> 8;
+	R_StudioSetRemapColors( g_nTopColor, g_nBottomColor );
+
+	// Check if player is visible before expensive rendering
+	vec3_t screen_pos;
+	vec3_t player_pos;
+	if( !kek_GetPlayerPosition( RI.currententity, player_pos ) )
+		return;
+
+	// Convert to screen coordinates to check if player is visible
+	if( TriWorldToScreen( player_pos, screen_pos ) )
+		return; // Behind camera
+
+	// Check if on screen
+	float vp_width = (float)RI.viewport[2];
+	float vp_height = (float)RI.viewport[3];
+	if( screen_pos[0] < -vp_width || screen_pos[0] > vp_width * 2.0f ||
+	    screen_pos[1] < -vp_height || screen_pos[1] > vp_height * 2.0f )
+		return; // Off screen
+
+	// Now render the glow effect
+	R_StudioSetChromeOrigin();
+	R_StudioSetForceFaceFlags( 0 );
+
+	// Skip normal render, go directly to glow render
+	R_StudioSetForceFaceFlags( STUDIO_NF_CHROME );
+	TriSpriteTexture( R_GetChromeSprite(), 0 );
+
+	// Render the glow effect
+	R_StudioRenderFinal();
+
+	// Restore original render state
+	ent->curstate.renderfx = saved_renderfx;
+	ent->curstate.renderamt = saved_renderamt;
+	ent->curstate.rendercolor = saved_rendercolor;
+
+	// Restore render context
+	RI.currententity = saved_currententity;
+	RI.currentmodel = saved_currentmodel;
+}
+void kek_RenderPlayerGlow( cl_entity_t *ent )
+{
+	if( !ent || !ent->model )
+		return;
+
+	// Don't render glow for local player to avoid visual artifacts
+	if( RP_LOCALCLIENT( ent ) )
+		return;
+
+	// Select color based on kek_player_glow value
+	int color_index = (int)kek_player_glow.value;
+	if( color_index <= 0 || color_index > 20 )
+		return; // No glow selected
+
+	// Save current render state
+	cl_entity_t *saved_currententity = RI.currententity;
+	model_t *saved_currentmodel = RI.currentmodel;
+
+	// Set up entity and model for glow rendering
+	RI.currententity = ent;
+	RI.currentmodel = ent->model;
+
+	// Temporarily set glow shell effect with custom color
+	int saved_renderfx = ent->curstate.renderfx;
+	int saved_renderamt = ent->curstate.renderamt;
+	color24 saved_rendercolor = ent->curstate.rendercolor;
+
+	// Set glow shell effect
+	ent->curstate.renderfx = kRenderFxGlowShell;
+	ent->curstate.renderamt = (int)(kek_player_glow_alpha.value * 255.0f / 100.0f); // Convert to 0-255 range
+
+	// Set glow color based on selection
+	switch( color_index )
+	{
+	case 1: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 0; break; // Красный
+	case 2: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 0; break; // Зеленый
+	case 3: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 255; break; // Синий
+	case 4: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 0; break; // Желтый
+	case 5: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 255; break; // Фиолетовый
+	case 6: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 255; break; // Голубой
+	case 7: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 0; break; // Оранжевый
+	case 8: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 128; break; // Серый
+	case 9: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 255; ent->curstate.rendercolor.b = 255; break; // Белый
+	case 10: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 0; break; // Черный
+	case 11: ent->curstate.rendercolor.r = 255; ent->curstate.rendercolor.g = 192; ent->curstate.rendercolor.b = 203; break; // Розовый
+	case 12: ent->curstate.rendercolor.r = 150; ent->curstate.rendercolor.g = 100; ent->curstate.rendercolor.b = 50; break; // Коричневый
+	case 13: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 128; break; // Пурпурный
+	case 14: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 0; break; // Темно-зеленый
+	case 15: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 0; break; // Оливковый
+	case 16: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 128; ent->curstate.rendercolor.b = 128; break; // Бирюзовый
+	case 17: ent->curstate.rendercolor.r = 128; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 0; break; // Темно-красный
+	case 18: ent->curstate.rendercolor.r = 0; ent->curstate.rendercolor.g = 0; ent->curstate.rendercolor.b = 128; break; // Темно-синий
+	case 19: ent->curstate.rendercolor.r = 204; ent->curstate.rendercolor.g = 204; ent->curstate.rendercolor.b = 153; break; // Кремовый
+	case 20: ent->curstate.rendercolor.r = 76; ent->curstate.rendercolor.g = 76; ent->curstate.rendercolor.b = 76; break; // Темно-серый
+	}
+
+	// Render with glow shell effect - this will render the model twice (normal + glow)
+	R_StudioDrawModel( STUDIO_RENDER );
+
+	// Restore original render state
+	ent->curstate.renderfx = saved_renderfx;
+	ent->curstate.renderamt = saved_renderamt;
+	ent->curstate.rendercolor = saved_rendercolor;
+
+	// Restore render context
+	RI.currententity = saved_currententity;
+	RI.currentmodel = saved_currentmodel;
 }

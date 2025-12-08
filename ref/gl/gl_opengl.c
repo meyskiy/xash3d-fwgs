@@ -119,11 +119,12 @@ CVAR_DEFINE_AUTO( kek_custom_fov, "0", FCVAR_ARCHIVE, "enable custom viewmodel F
 CVAR_DEFINE_AUTO( kek_custom_fov_value, "10", FCVAR_ARCHIVE, "custom FOV increase (higher = smaller/more distant arms)" );
 
 // Viewmodel glow effect
-CVAR_DEFINE_AUTO( kek_viewmodel_glow, "0", FCVAR_ARCHIVE, "enable viewmodel glow effect" );
-CVAR_DEFINE_AUTO( kek_viewmodel_glow_r, "255", FCVAR_ARCHIVE, "viewmodel glow color Red (0-255)" );
-CVAR_DEFINE_AUTO( kek_viewmodel_glow_g, "255", FCVAR_ARCHIVE, "viewmodel glow color Green (0-255)" );
-CVAR_DEFINE_AUTO( kek_viewmodel_glow_b, "255", FCVAR_ARCHIVE, "viewmodel glow color Blue (0-255)" );
+CVAR_DEFINE_AUTO( kek_viewmodel_glow, "0", FCVAR_ARCHIVE, "enable viewmodel glow effect (0=off, 1-20=different colors)" );
 CVAR_DEFINE_AUTO( kek_viewmodel_glow_alpha, "80", FCVAR_ARCHIVE, "viewmodel glow intensity (0-255, affects both brightness and thickness)" );
+
+// Player glow effect
+CVAR_DEFINE_AUTO( kek_player_glow, "0", FCVAR_ARCHIVE, "enable player glow effect (0=off, 1-20=different colors)" );
+CVAR_DEFINE_AUTO( kek_player_glow_alpha, "80", FCVAR_ARCHIVE, "player glow intensity (0-255, affects both brightness and thickness)" );
 
 
 DEFINE_ENGINE_SHARED_CVAR_LIST()
@@ -1330,10 +1331,11 @@ static void GL_InitCommands( void )
 
 	// Viewmodel glow cvars
 	gEngfuncs.Cvar_RegisterVariable( &kek_viewmodel_glow );
-	gEngfuncs.Cvar_RegisterVariable( &kek_viewmodel_glow_r );
-	gEngfuncs.Cvar_RegisterVariable( &kek_viewmodel_glow_g );
-	gEngfuncs.Cvar_RegisterVariable( &kek_viewmodel_glow_b );
 	gEngfuncs.Cvar_RegisterVariable( &kek_viewmodel_glow_alpha );
+
+	// Player glow cvars
+	gEngfuncs.Cvar_RegisterVariable( &kek_player_glow );
+	gEngfuncs.Cvar_RegisterVariable( &kek_player_glow_alpha );
 
 
 	// Debug cvar
